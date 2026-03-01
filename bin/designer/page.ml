@@ -1,0 +1,565 @@
+(******************************************************************************)
+(*                                                                            *)
+(* SPDX-License-Identifier: MIT                                               *)
+(* Copyright (c) 2026 Nomadic Labs <contact@nomadic-labs.com>                 *)
+(*                                                                            *)
+(******************************************************************************)
+
+[@@@warning "-32-34-37-69"]
+
+open Miaou_core
+module Navigation = Miaou_core.Navigation
+module Keys = Miaou_core.Keys
+module Key_event = Miaou_interfaces.Key_event
+module FB = Miaou_widgets_layout.File_browser_widget
+module Flex = Miaou_widgets_layout.Flex_layout
+module LW = Miaou_widgets_display.List_widget
+module Catalog = Miaou_composer_lib.Catalog
+module Action = Miaou_composer_lib.Action
+
+let left_w = 28
+let right_w = 34
+
+(* ---- Status bar ---- *)
+
+let render_status_bar (t : Designer_state.t) cols =
+  let mode_str =
+    match t.mode with
+    | Designer_state.Design -> "DESIGN"
+    | Designer_state.Preview -> "PREVIEW"
+  in
+  let wiring_count = Designer_state.get_wiring_count t in
+  let widget_count = List.length (Designer_state.get_widget_ids t) in
+  let focused =
+    match Preview.get_focused_widget t with Some id -> id | None -> "-"
+  in
+  let bar =
+    Printf.sprintf " [%s] %s | widgets: %d | wirings: %d | focus: %s" mode_str
+      t.page_id widget_count wiring_count focused
+  in
+  let padded =
+    let len = String.length bar in
+    if len >= cols then String.sub bar 0 cols
+    else bar ^ String.make (cols - len) ' '
+  in
+  "\027[7m" ^ padded ^ "\027[0m"
+
+(* ---- Wiring helpers ---- *)
+
+let finish_wiring (t : Designer_state.t) ~source ~event ~action_type ~form =
+  let target = Form.get_action_target form in
+  let value = Form.get_action_value form in
+  let action_opt : Action.t option =
+    match action_type with
+    | "toggle" -> Some (Action.Toggle { target })
+    | "set_text" -> Some (Action.Set_text { target; value })
+    | "append_text" -> Some (Action.Append_text { target; value })
+    | "set_checked" ->
+        let v = value = "true" || value = "1" in
+        Some (Action.Set_checked { target; value = v })
+    | "focus" -> Some (Action.Focus { target })
+    | "set_disabled" ->
+        let v = value = "true" || value = "1" in
+        Some (Action.Set_disabled { target; value = v })
+    | "navigate" -> Some (Action.Navigate { target = value })
+    | "back" -> Some Action.Back
+    | "quit" -> Some Action.Quit
+    | _ -> None
+  in
+  match action_opt with
+  | None -> t
+  | Some act -> (
+      match Designer_state.add_wiring t ~source ~event ~action:act with
+      | Ok t' -> { t' with menu = Menu.pop t'.menu; form = None }
+      | Error msg -> Designer_state.open_error_modal t msg)
+
+(* ---- Form submission ---- *)
+
+let submit_add_widget (t : Designer_state.t) form widget_type =
+  let existing_ids = Designer_state.get_widget_ids t in
+  match Form.validate form ~existing_ids with
+  | Error errors ->
+      let form' = { form with Form.errors } in
+      { t with form = Some form' }
+  | Ok () -> (
+      let params_json = Form.to_json form in
+      match Designer_state.add_widget t ~widget_type ~params_json with
+      | Error msg -> Designer_state.open_error_modal t msg
+      | Ok t' -> { t' with form = None; menu = Menu.pop t'.menu })
+
+(* ---- Handle menu action (kept for old menu path / wiring flow) ---- *)
+
+let handle_menu_action (t : Designer_state.t) action =
+  match action with
+  | Menu.GoSubmenu "add_widget" ->
+      { t with menu = Menu.push_level t.menu (Menu.widget_catalog_level ()) }
+  | Menu.GoSubmenu s
+    when String.length s > 10 && String.sub s 0 10 = "__remove__" -> (
+      let id = String.sub s 11 (String.length s - 11) in
+      match Designer_state.remove_widget t ~id with
+      | Error msg -> Designer_state.open_error_modal t msg
+      | Ok t' -> { t' with menu = Menu.pop t'.menu })
+  | Menu.GoSubmenu _ -> t
+  | Menu.AddWidget wtype -> (
+      match Form.make_for_widget_type wtype with
+      | None -> t
+      | Some form ->
+          {
+            t with
+            form = Some form;
+            menu = Menu.push_level t.menu (Menu.widget_catalog_level ());
+          })
+  | Menu.RemoveWidget ->
+      let ids = Designer_state.get_widget_ids t in
+      let items =
+        List.map
+          (fun id ->
+            Menu.
+              { label = id; hint = ""; action = GoSubmenu ("__remove__:" ^ id) })
+          ids
+      in
+      let level =
+        Menu.
+          { title = "Remove Widget"; items = Array.of_list items; cursor = 0 }
+      in
+      { t with menu = Menu.push_level t.menu level }
+  | Menu.AddWiringStep1 ->
+      let ids = Designer_state.get_widget_ids t in
+      if ids = [] then
+        Designer_state.open_error_modal t
+          "No widgets to wire. Add widgets first."
+      else
+        { t with menu = Menu.push_level t.menu (Menu.wiring_step1_level ids) }
+  | Menu.AddWiringStep2 source ->
+      let page = Designer_state.get_page t in
+      let catalog = Catalog.widget_catalog () in
+      let widget_type =
+        match Hashtbl.find_opt page.Miaou_composer_lib.Page.widgets source with
+        | Some wb -> Miaou_composer_lib.Widget_box.type_name wb
+        | None -> ""
+      in
+      let events =
+        match List.find_opt (fun e -> e.Catalog.name = widget_type) catalog with
+        | Some entry -> entry.events
+        | None -> [ "click"; "change"; "toggle"; "select" ]
+      in
+      {
+        t with
+        menu = Menu.push_level t.menu (Menu.wiring_step2_level source events);
+      }
+  | Menu.AddWiringStep3 (source, event) ->
+      {
+        t with
+        menu = Menu.push_level t.menu (Menu.wiring_step3_level source event);
+      }
+  | Menu.AddWiringFinish (source, event, action_type) ->
+      let widget_ids = Designer_state.get_widget_ids t in
+      if action_type = "back" || action_type = "quit" then
+        let dummy_form = Form.make_wiring_action_form action_type [] in
+        finish_wiring t ~source ~event ~action_type ~form:dummy_form
+      else
+        let form = Form.make_wiring_action_form action_type widget_ids in
+        let form' =
+          {
+            form with
+            Form.title =
+              Printf.sprintf "Wiring: %s.%s -> %s" source event action_type;
+          }
+        in
+        {
+          t with
+          form = Some form';
+          menu =
+            Menu.push_level t.menu Menu.{ title = ""; items = [||]; cursor = 0 };
+        }
+  | Menu.RemoveWiring i -> (
+      match Designer_state.remove_wiring_by_index t ~index:i with
+      | Error msg -> Designer_state.open_error_modal t msg
+      | Ok t' -> { t' with menu = Menu.pop t'.menu })
+  | Menu.ListWirings ->
+      let wirings = Designer_state.get_wirings_display t in
+      { t with menu = Menu.push_level t.menu (Menu.wiring_list_level wirings) }
+  | Menu.PreviewMode -> Designer_state.switch_mode t
+  | Menu.Export ->
+      let on_confirm path t' =
+        match Designer_state.export_page t' path with
+        | Ok t'' -> t''
+        | Error msg -> Designer_state.open_error_modal t' msg
+      in
+      Designer_state.open_file_path_modal t "Export to file:" on_confirm
+  | Menu.Import ->
+      let on_confirm path t' =
+        match Designer_state.import_page t' path with
+        | Ok t'' -> t''
+        | Error msg -> Designer_state.open_error_modal t' msg
+      in
+      Designer_state.open_import_browser t on_confirm
+  | Menu.Quit -> t
+
+(* ---- Modal key handler ---- *)
+
+and handle_modal_key (t : Designer_state.t) (key : Keys.t) =
+  match t.modal with
+  | Some { mk = Designer_state.File_browser { fb; on_confirm }; _ } ->
+      let key_str =
+        match key with Keys.Escape -> "Esc" | _ -> Keys.to_string key
+      in
+      let fb' = FB.handle_key fb ~key:key_str in
+      if FB.is_cancelled fb' then Designer_state.close_modal t
+      else (
+        match FB.get_pending_selection fb' with
+        | Some path ->
+            let t' = Designer_state.close_modal t in
+            on_confirm path t'
+        | None -> Designer_state.update_file_browser t fb')
+  | _ -> (
+      match key with
+      | Keys.Escape -> Designer_state.close_modal t
+      | Keys.Enter -> Designer_state.modal_confirm t
+      | Keys.Backspace -> Designer_state.modal_input_backspace t
+      | Keys.Char c -> Designer_state.modal_input_append t c
+      | _ -> t)
+
+(* ---- Legacy form key handler (wiring forms use t.form) ---- *)
+
+and handle_legacy_form_key (t : Designer_state.t) form (key : Keys.t) =
+  match key with
+  | Keys.Escape -> { t with Designer_state.form = None; menu = Menu.pop t.menu }
+  | Keys.Tab ->
+      let form' = Form.move_focus form 1 in
+      { t with form = Some form' }
+  | Keys.ShiftTab ->
+      let form' = Form.move_focus form (-1) in
+      { t with form = Some form' }
+  | Keys.Enter ->
+      let title = form.Form.title in
+      let is_widget_form =
+        String.length title > 4 && String.sub title 0 4 = "Add "
+      in
+      let is_wiring_form =
+        String.length title > 8 && String.sub title 0 8 = "Wiring: "
+      in
+      if is_widget_form then
+        let widget_type = String.sub title 4 (String.length title - 4) in
+        submit_add_widget t form widget_type
+      else if is_wiring_form then begin
+        let body = String.sub title 8 (String.length title - 8) in
+        match String.split_on_char ' ' body with
+        | src_evt :: "->" :: act :: _ -> (
+            match String.index_opt src_evt '.' with
+            | None -> t
+            | Some dot_pos ->
+                let source = String.sub src_evt 0 dot_pos in
+                let event =
+                  String.sub src_evt (dot_pos + 1)
+                    (String.length src_evt - dot_pos - 1)
+                in
+                finish_wiring t ~source ~event ~action_type:act ~form)
+        | _ -> t
+      end
+      else t
+  | Keys.Backspace ->
+      let form' = Form.update_focused_field form "Backspace" in
+      { t with form = Some form' }
+  | Keys.Char c ->
+      let form' = Form.update_focused_field form c in
+      { t with form = Some form' }
+  | _ -> t
+
+(* ---- Three-pane render helpers ---- *)
+
+let render_palette (t : Designer_state.t) ~size:_ =
+  LW.render t.palette ~focus:(t.active_pane = Designer_state.PalettePane)
+
+let render_layout_tree (t : Designer_state.t) ~size:_ =
+  let title = "─ Layout Tree " ^ String.make 14 '-' in
+  title ^ "\n"
+  ^ LW.render t.layout_tree ~focus:(t.active_pane = Designer_state.TreePane)
+
+let render_left_pane (t : Designer_state.t) ~size =
+  match t.modal with
+  | Some { mk = Designer_state.File_path { label; _ }; input } ->
+      ignore size;
+      Printf.sprintf "\n  %s\n  > %s_\n\n  [Enter] confirm  [Esc] cancel" label
+        input
+  | Some { mk = Designer_state.File_browser { fb; _ }; _ } ->
+      FB.render_with_size fb ~focus:true
+        ~size:{ LTerm_geom.rows = size.LTerm_geom.rows; cols = left_w }
+  | Some { mk = Designer_state.Error_msg { message }; _ } ->
+      ignore size;
+      Printf.sprintf "\n  Error:\n  %s\n\n  [Esc] dismiss" message
+  | None -> (
+      match t.form with
+      | Some form -> Form.render form ~width:left_w
+      | None ->
+          (* Palette + layout tree stacked in a column flex *)
+          let palette_rows = max 1 (size.LTerm_geom.rows * 6 / 10) in
+          let tree_rows = max 1 (size.LTerm_geom.rows - palette_rows) in
+          let palette_size = { LTerm_geom.rows = palette_rows; cols = left_w } in
+          let tree_size = { LTerm_geom.rows = tree_rows; cols = left_w } in
+          let layout =
+            Flex.create ~direction:Flex.Column ~align_items:Flex.Stretch
+              [
+                {
+                  Flex.render = (fun ~size -> render_palette t ~size);
+                  basis = Flex.Ratio 0.6;
+                  cross = None;
+                };
+                {
+                  Flex.render = (fun ~size -> render_layout_tree t ~size);
+                  basis = Flex.Ratio 0.4;
+                  cross = None;
+                };
+              ]
+          in
+          ignore (palette_size, tree_size);
+          Flex.render layout ~size)
+
+let render_canvas (t : Designer_state.t) ~size =
+  Preview.render_preview t ~cols:size.LTerm_geom.cols ~rows:size.LTerm_geom.rows
+
+let render_right_pane (t : Designer_state.t) ~size =
+  let width = size.LTerm_geom.cols in
+  match t.properties_form with
+  | Some form ->
+      let focused = t.active_pane = Designer_state.PropertiesPane in
+      let focus_indicator = if focused then "► " else "  " in
+      let title_line = focus_indicator ^ "Properties\n" ^ String.make width '-' ^ "\n" in
+      title_line ^ Form.render form ~width
+  | None ->
+      let widget_count = List.length (Designer_state.get_widget_ids t) in
+      let wiring_count = Designer_state.get_wiring_count t in
+      let info =
+        Printf.sprintf
+          "  Page: %s\n  Widgets: %d\n  Wirings: %d\n\n  Keys:\n  [p] Preview\n  [i] Import\n  [e] Export\n  [w] Wire\n  [q] Quit\n  [Tab] Next pane\n  [Del] Remove widget"
+          t.page_id widget_count wiring_count
+      in
+      ignore width;
+      info
+
+(* ---- Three-pane view ---- *)
+
+let view pstate ~focus:_ ~size =
+  let t = pstate.Navigation.s in
+  let content = { size with LTerm_geom.rows = max 1 (size.LTerm_geom.rows - 2) } in
+  let layout =
+    Flex.create ~direction:Flex.Row ~align_items:Flex.Stretch
+      [
+        {
+          Flex.render = (fun ~size -> render_left_pane t ~size);
+          basis = Flex.Px left_w;
+          cross = None;
+        };
+        {
+          Flex.render = (fun ~size -> render_canvas t ~size);
+          basis = Flex.Fill;
+          cross = None;
+        };
+        {
+          Flex.render = (fun ~size -> render_right_pane t ~size);
+          basis = Flex.Px right_w;
+          cross = None;
+        };
+      ]
+  in
+  Flex.render layout ~size:content ^ "\n" ^ render_status_bar t size.LTerm_geom.cols
+
+(* ---- Key handlers for three-pane design mode ---- *)
+
+let handle_palette_key (t : Designer_state.t) (key : Keys.t) =
+  match key with
+  | Keys.Up ->
+      let p = LW.handle_key t.palette ~key:"Up" in
+      { t with Designer_state.palette = p }
+  | Keys.Down ->
+      let p = LW.handle_key t.palette ~key:"Down" in
+      { t with Designer_state.palette = p }
+  | Keys.Left ->
+      let p = LW.handle_key t.palette ~key:"Left" in
+      { t with Designer_state.palette = p }
+  | Keys.Right ->
+      let p = LW.handle_key t.palette ~key:"Right" in
+      { t with Designer_state.palette = p }
+  | Keys.Enter -> (
+      match LW.selected t.palette with
+      | None -> t
+      | Some item ->
+          if not item.LW.selectable then
+            (* group — toggle expand *)
+            { t with Designer_state.palette = LW.toggle t.palette }
+          else
+            let widget_type = Option.value ~default:item.LW.label item.LW.id in
+            (match Designer_state.add_widget_with_defaults t ~widget_type with
+             | Error msg -> Designer_state.open_error_modal t msg
+             | Ok t' -> t'))
+  | _ -> t
+
+let handle_tree_key (t : Designer_state.t) (key : Keys.t) =
+  match key with
+  | Keys.Up ->
+      let lw = LW.handle_key t.layout_tree ~key:"Up" in
+      { t with Designer_state.layout_tree = lw }
+  | Keys.Down ->
+      let lw = LW.handle_key t.layout_tree ~key:"Down" in
+      { t with Designer_state.layout_tree = lw }
+  | Keys.Enter -> (
+      match LW.selected t.layout_tree with
+      | None -> t
+      | Some item ->
+          let id = Option.value ~default:item.LW.label item.LW.id in
+          Designer_state.select_widget t ~id)
+  | Keys.Delete | Keys.Backspace -> (
+      match t.focused_widget with
+      | None -> (
+          (* Try to remove the currently highlighted tree item *)
+          match LW.selected t.layout_tree with
+          | None -> t
+          | Some item ->
+              let id = Option.value ~default:item.LW.label item.LW.id in
+              (match Designer_state.remove_widget t ~id with
+               | Error msg -> Designer_state.open_error_modal t msg
+               | Ok t' -> t'))
+      | Some id -> (
+          match Designer_state.remove_widget t ~id with
+          | Error msg -> Designer_state.open_error_modal t msg
+          | Ok t' -> t'))
+  | _ -> t
+
+let handle_properties_key (t : Designer_state.t) (key : Keys.t) =
+  match t.properties_form with
+  | None -> t
+  | Some form -> (
+      match key with
+      | Keys.Escape ->
+          {
+            t with
+            focused_widget = None;
+            properties_form = None;
+            active_pane = Designer_state.PalettePane;
+          }
+      | Keys.Tab ->
+          let form' = Form.move_focus form 1 in
+          { t with properties_form = Some form' }
+      | Keys.ShiftTab ->
+          let form' = Form.move_focus form (-1) in
+          { t with properties_form = Some form' }
+      | Keys.Enter ->
+          let t' = Designer_state.apply_properties_form t form in
+          t'
+      | Keys.Backspace ->
+          let form' = Form.update_focused_field form "Backspace" in
+          { t with properties_form = Some form' }
+      | Keys.Char c ->
+          let form' = Form.update_focused_field form c in
+          { t with properties_form = Some form' }
+      | _ -> t)
+
+(* ---- on_key ---- *)
+
+let on_key pstate key ~size:_ =
+  let t = pstate.Navigation.s in
+  match t.Designer_state.mode with
+  | Designer_state.Preview -> (
+      match key with
+      | Keys.Escape ->
+          let t' = Designer_state.switch_mode t in
+          (Navigation.update (fun _ -> t') pstate, Key_event.Handled)
+      | Keys.Char c ->
+          Preview.send_key t ~key:c;
+          (pstate, Key_event.Handled)
+      | Keys.Tab ->
+          Preview.send_key t ~key:"Tab";
+          (pstate, Key_event.Handled)
+      | Keys.ShiftTab ->
+          Preview.send_key t ~key:"S-Tab";
+          (pstate, Key_event.Handled)
+      | Keys.Enter ->
+          Preview.send_key t ~key:"Enter";
+          (pstate, Key_event.Handled)
+      | Keys.Backspace ->
+          Preview.send_key t ~key:"Backspace";
+          (pstate, Key_event.Handled)
+      | Keys.Up ->
+          Preview.send_key t ~key:"Up";
+          (pstate, Key_event.Handled)
+      | Keys.Down ->
+          Preview.send_key t ~key:"Down";
+          (pstate, Key_event.Handled)
+      | Keys.Left ->
+          Preview.send_key t ~key:"Left";
+          (pstate, Key_event.Handled)
+      | Keys.Right ->
+          Preview.send_key t ~key:"Right";
+          (pstate, Key_event.Handled)
+      | _ -> (pstate, Key_event.Bubble))
+  | Designer_state.Design -> (
+      match t.Designer_state.modal with
+      | Some _ ->
+          let t' = handle_modal_key t key in
+          (Navigation.update (fun _ -> t') pstate, Key_event.Handled)
+      | None -> (
+          (* Legacy form (wiring forms) take priority *)
+          match t.Designer_state.form with
+          | Some form ->
+              let t' = handle_legacy_form_key t form key in
+              (Navigation.update (fun _ -> t') pstate, Key_event.Handled)
+          | None ->
+              (* Global shortcuts *)
+              let t' =
+                match key with
+                | Keys.Tab -> Designer_state.cycle_pane t
+                | Keys.ShiftTab -> Designer_state.cycle_pane_back t
+                | Keys.Char "p" -> Designer_state.switch_mode t
+                | Keys.Char "e" ->
+                    handle_menu_action t Menu.Export
+                | Keys.Char "i" ->
+                    handle_menu_action t Menu.Import
+                | Keys.Char "w" ->
+                    handle_menu_action t Menu.AddWiringStep1
+                | Keys.Char "q" -> t (* handled below *)
+                | _ ->
+                    (* Delegate to active pane *)
+                    (match t.active_pane with
+                     | Designer_state.PalettePane -> handle_palette_key t key
+                     | Designer_state.TreePane -> handle_tree_key t key
+                     | Designer_state.PropertiesPane -> handle_properties_key t key)
+              in
+              let is_quit = key = Keys.Char "q" && t' == t in
+              if is_quit then (Navigation.quit pstate, Key_event.Handled)
+              else (Navigation.update (fun _ -> t') pstate, Key_event.Handled)))
+
+(* ---- PAGE_SIG ---- *)
+
+type state = Designer_state.t
+type msg = unit
+
+let init () =
+  let s = Designer_state.create () in
+  Navigation.make s
+
+let update pstate _msg = pstate
+
+let on_modal_key pstate key ~size = on_key pstate key ~size
+
+let has_modal pstate =
+  let t = pstate.Navigation.s in
+  t.Designer_state.modal <> None
+
+let key_hints pstate =
+  let _t = pstate.Navigation.s in
+  []
+
+let refresh pstate = pstate
+
+(* Deprecated stubs *)
+type key_binding = state Tui_page.key_binding_desc
+type pstate = state Navigation.t
+
+let handle_key pstate _s ~size:_ = pstate
+let handle_modal_key pstate _s ~size:_ = pstate
+let keymap _pstate = []
+let move pstate _n = pstate
+let service_select pstate _n = pstate
+let service_cycle pstate _n = pstate
+let back pstate = pstate
+let handled_keys () = []

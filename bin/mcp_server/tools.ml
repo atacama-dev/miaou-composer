@@ -200,8 +200,22 @@ let all_tools () =
     {
       name = "get_catalog";
       description =
-        "Get the widget/action/layout catalog (available types and parameters)";
+        "Get the widget/action/layout catalog (available types and parameters). \
+         Compositor-managed widgets include structured params/events/queryable \
+         fields plus an 'mli' field with the full OCaml interface for detailed \
+         API docs. Registry-only widgets (not composable) appear with just \
+         'name' and 'mli'.";
       input_schema = make_schema ~properties:[] ~required:[];
+    };
+    {
+      name = "export_page";
+      description =
+        "Export a page definition to JSON (layout + wirings + focus_ring). \
+         The returned JSON can be passed directly to create_page to recreate the page.";
+      input_schema =
+        make_schema
+          ~properties:[ ("page_id", string_prop ~desc:"Target page ID") ]
+          ~required:[ "page_id" ];
     };
     {
       name = "resize";
@@ -235,6 +249,90 @@ let all_tools () =
         make_schema
           ~properties:[ ("page_id", string_prop ~desc:"Target page ID") ]
           ~required:[ "page_id" ];
+    };
+    {
+      name = "render_text";
+      description =
+        "Render a compositor page and return plain text (ANSI codes stripped)";
+      input_schema =
+        make_schema
+          ~properties:[ ("page_id", string_prop ~desc:"Target page ID") ]
+          ~required:[ "page_id" ];
+    };
+    {
+      name = "headless_init";
+      description =
+        "Launch a Miaou app binary in headless mode (MIAOU_DRIVER=headless) \
+         and return the initial screen as plain text";
+      input_schema =
+        make_schema
+          ~properties:
+            [
+              ("binary", string_prop ~desc:"Path or name of the Miaou binary");
+              ("rows", int_prop ~desc:"Terminal rows (default 24)");
+              ("cols", int_prop ~desc:"Terminal columns (default 80)");
+              ( "env",
+                object_prop
+                  ~desc:"Extra environment variables to pass (optional)" );
+            ]
+          ~required:[ "binary" ];
+    };
+    {
+      name = "headless_key";
+      description = "Send a key to a headless session and return the new frame";
+      input_schema =
+        make_schema
+          ~properties:
+            [
+              ("session", string_prop ~desc:"Session ID");
+              ("key", string_prop ~desc:"Key name (e.g. 'Tab', 'Enter', 'a')");
+            ]
+          ~required:[ "session"; "key" ];
+    };
+    {
+      name = "headless_click";
+      description =
+        "Send a mouse click to a headless session and return the new frame";
+      input_schema =
+        make_schema
+          ~properties:
+            [
+              ("session", string_prop ~desc:"Session ID");
+              ("row", int_prop ~desc:"Row (0-based)");
+              ("col", int_prop ~desc:"Column (0-based)");
+              ("button", string_prop ~desc:"Button: 'left', 'right', 'middle'");
+            ]
+          ~required:[ "session"; "row"; "col" ];
+    };
+    {
+      name = "headless_tick";
+      description =
+        "Run N idle ticks in a headless session (background refresh) and \
+         return the new frame";
+      input_schema =
+        make_schema
+          ~properties:
+            [
+              ("session", string_prop ~desc:"Session ID");
+              ("n", int_prop ~desc:"Number of idle ticks (default 1)");
+            ]
+          ~required:[ "session" ];
+    };
+    {
+      name = "headless_render";
+      description = "Return the current frame of a headless session";
+      input_schema =
+        make_schema
+          ~properties:[ ("session", string_prop ~desc:"Session ID") ]
+          ~required:[ "session" ];
+    };
+    {
+      name = "headless_stop";
+      description = "Stop a headless session and reap its process";
+      input_schema =
+        make_schema
+          ~properties:[ ("session", string_prop ~desc:"Session ID") ]
+          ~required:[ "session" ];
     };
   ]
 

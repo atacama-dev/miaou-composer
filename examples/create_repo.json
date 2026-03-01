@@ -1,0 +1,105 @@
+{
+  "id": "new_repo",
+  "size": {
+    "rows": 30,
+    "cols": 90
+  },
+  "layout": {
+    "type": "card",
+    "title": "Create Repository",
+    "footer": "Tab navigate  Enter confirm  q quit",
+    "child": {
+      "type": "flex",
+      "direction": "column",
+      "gap": 1,
+      "padding": {
+        "top": 1,
+        "bottom": 1,
+        "left": 2,
+        "right": 2
+      },
+      "children": [
+        {
+          "type": "textbox",
+          "id": "repo_name",
+          "title": "Repository name",
+          "placeholder": "my-project",
+          "width": 50
+        },
+        {
+          "type": "textarea",
+          "id": "repo_desc",
+          "title": "Description",
+          "placeholder": "What does this project do?",
+          "width": 50,
+          "height": 3
+        },
+        {
+          "type": "switch",
+          "id": "is_private",
+          "label": "Private repository",
+          "on": false
+        },
+        {
+          "type": "select",
+          "id": "license",
+          "title": "License",
+          "items": ["MIT", "Apache 2.0", "GPL 3.0", "No license"]
+        },
+        {
+          "type": "flex",
+          "direction": "row",
+          "gap": 1,
+          "justify": "end",
+          "children": [
+            {
+              "type": "button",
+              "id": "cancel_btn",
+              "label": "Cancel"
+            },
+            {
+              "type": "button",
+              "id": "create_btn",
+              "label": "Create repository"
+            }
+          ]
+        },
+        {
+          "type": "pager",
+          "id": "status",
+          "title": "Status",
+          "text": "Fill in the details above to create your repository."
+        }
+      ]
+    }
+  },
+  "wirings": [
+    {
+      "source": "create_btn",
+      "event": "click",
+      "action": {
+        "type": "set_text",
+        "target": "status",
+        "value": "Repository created! Clone: git@github.com:user/repo.git"
+      }
+    },
+    {
+      "source": "cancel_btn",
+      "event": "click",
+      "action": {
+        "type": "set_text",
+        "target": "status",
+        "value": "Repository creation cancelled."
+      }
+    },
+    {
+      "source": "is_private",
+      "event": "toggle",
+      "action": {
+        "type": "set_text",
+        "target": "status",
+        "value": "Access level changed."
+      }
+    }
+  ]
+}

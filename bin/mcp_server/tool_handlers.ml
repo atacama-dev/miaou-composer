@@ -5,6 +5,66 @@ open Miaou_composer_lib
 open Miaou_composer_bridge
 open Miaou_composer_export
 
+(* ── Headless session table ─────────────────────────────────────────────── *)
+
+type headless_session = { ic : in_channel; oc : out_channel; pid : int }
+
+let headless_sessions : (string, headless_session) Hashtbl.t = Hashtbl.create 4
+let headless_id_counter = ref 0
+
+let fresh_session_id () =
+  incr headless_id_counter;
+  Printf.sprintf "hs%d" !headless_id_counter
+
+(** Send a JSON command to a headless session and read back one JSON line.
+    Returns [Error msg] if the process has closed its end. *)
+let headless_rpc (s : headless_session) (cmd : Yojson.Safe.t) :
+    (Yojson.Safe.t, string) result =
+  (try
+     output_string s.oc (Yojson.Safe.to_string cmd);
+     output_char s.oc '\n';
+     flush s.oc
+   with Sys_error e -> raise (Sys_error e));
+  try
+    let line = input_line s.ic in
+    Ok (Yojson.Safe.from_string line)
+  with
+  | End_of_file -> Error "Headless process closed its output"
+  | Yojson.Json_error e -> Error ("Bad JSON from headless process: " ^ e)
+
+let frame_of_json json =
+  match json with
+  | `Assoc pairs -> (
+      match List.assoc_opt "type" pairs with
+      | Some (`String "frame") -> (
+          match List.assoc_opt "text" pairs with
+          | Some (`String text) -> Ok text
+          | _ -> Error "Missing 'text' in frame response")
+      | Some (`String "nav") ->
+          let action =
+            match List.assoc_opt "action" pairs with
+            | Some (`String a) -> a
+            | _ -> "unknown"
+          in
+          Ok (Printf.sprintf "[navigation: %s]" action)
+      | Some (`String "error") ->
+          let msg =
+            match List.assoc_opt "message" pairs with
+            | Some (`String m) -> m
+            | _ -> "unknown error"
+          in
+          Error ("Headless error: " ^ msg)
+      | _ -> Error "Unexpected response from headless process")
+  | _ -> Error "Non-object JSON from headless process"
+
+let require_session args key =
+  match List.assoc_opt key args with
+  | Some (`String id) -> (
+      match Hashtbl.find_opt headless_sessions id with
+      | Some s -> Ok s
+      | None -> Error (Printf.sprintf "Headless session not found: %s" id))
+  | _ -> Error (Printf.sprintf "Missing required parameter: %s" key)
+
 let get_string args key =
   match List.assoc_opt key args with Some (`String s) -> Some s | _ -> None
 
@@ -260,10 +320,41 @@ let handle_tool (session : Session.t) ~tool_name
       let widgets = Catalog.widget_catalog () in
       let actions = Catalog.action_catalog () in
       let layouts = Catalog.layout_catalog () in
+      (* Enrich compositor widgets with mli from the registry *)
+      let enrich_widget_json json name =
+        match Miaou_registry.find ~name with
+        | None -> json
+        | Some entry -> (
+            match json with
+            | `Assoc pairs -> `Assoc (pairs @ [ ("mli", `String entry.mli) ])
+            | other -> other)
+      in
+      let widget_jsons =
+        List.map
+          (fun e -> enrich_widget_json (Catalog.entry_to_json e) e.Catalog.name)
+          widgets
+      in
+      (* Append registry-only widgets (not in compositor catalog) *)
+      let catalog_names =
+        List.map (fun e -> e.Catalog.name) widgets
+      in
+      let registry_only =
+        List.filter_map
+          (fun (entry : Miaou_registry.entry) ->
+            if List.mem entry.name catalog_names then None
+            else
+              Some
+                (`Assoc
+                   [
+                     ("name", `String entry.name);
+                     ("mli", `String entry.mli);
+                   ]))
+          (Miaou_registry.list ())
+      in
       ok_result
         (`Assoc
            [
-             ("widgets", `List (List.map Catalog.entry_to_json widgets));
+             ("widgets", `List (widget_jsons @ registry_only));
              ("actions", `List (List.map Catalog.action_to_json actions));
              ("layouts", `List (List.map Catalog.layout_to_json layouts));
            ])
@@ -305,4 +396,184 @@ let handle_tool (session : Session.t) ~tool_name
                  ("index", `Int index);
                  ("total", `Int total);
                ]))
+  | "export_page" -> (
+      match require_page session args with
+      | Error e -> Error e
+      | Ok page -> ok_result (Page_codec.page_to_json page))
+  | "render_text" -> (
+      match require_page session args with
+      | Error e -> Error e
+      | Ok page ->
+          let rendered = Json_export.export_rendered page in
+          let text =
+            match rendered with
+            | `String s -> Ansi_strip.strip s
+            | _ -> Ansi_strip.strip (Yojson.Safe.to_string rendered)
+          in
+          ok_result (`String text))
+  | "headless_init" -> (
+      match require_string args "binary" with
+      | Error e -> Error e
+      | Ok binary -> (
+          let rows =
+            match get_int args "rows" with Some n -> n | None -> 24
+          in
+          let cols =
+            match get_int args "cols" with Some n -> n | None -> 80
+          in
+          (* Build environment: current env + MIAOU_DRIVER=headless + extras *)
+          let base_env = Unix.environment () in
+          let extra_env =
+            match List.assoc_opt "env" args with
+            | Some (`Assoc pairs) ->
+                List.filter_map
+                  (fun (k, v) ->
+                    match v with `String s -> Some (k ^ "=" ^ s) | _ -> None)
+                  pairs
+            | _ -> []
+          in
+          let env =
+            Array.append base_env
+              (Array.of_list
+                 ([
+                    "MIAOU_DRIVER=headless";
+                    Printf.sprintf "MIAOU_HEADLESS_ROWS=%d" rows;
+                    Printf.sprintf "MIAOU_HEADLESS_COLS=%d" cols;
+                  ]
+                 @ extra_env))
+          in
+          let ic_read, ic_write = Unix.pipe () in
+          let oc_read, oc_write = Unix.pipe () in
+          let er_read, er_write = Unix.pipe () in
+          try
+            let pid =
+              Unix.create_process_env binary [| binary |] env oc_read ic_write
+                er_write
+            in
+            Unix.close oc_read;
+            Unix.close ic_write;
+            Unix.close er_write;
+            Unix.close er_read;
+            let ic = Unix.in_channel_of_descr ic_read in
+            let oc = Unix.out_channel_of_descr oc_write in
+            let s = { ic; oc; pid } in
+            (* Send initial resize *)
+            let init_cmd =
+              `Assoc
+                [
+                  ("cmd", `String "resize");
+                  ("rows", `Int rows);
+                  ("cols", `Int cols);
+                ]
+            in
+            match headless_rpc s init_cmd with
+            | Error e ->
+                Unix.close ic_read;
+                Unix.close oc_write;
+                Error ("Failed to initialize headless session: " ^ e)
+            | Ok json -> (
+                match frame_of_json json with
+                | Error e ->
+                    Unix.close ic_read;
+                    Unix.close oc_write;
+                    Error e
+                | Ok text ->
+                    let sid = fresh_session_id () in
+                    Hashtbl.replace headless_sessions sid s;
+                    ok_result
+                      (`Assoc
+                         [
+                           ("session", `String sid);
+                           ("text", `String text);
+                           ("rows", `Int rows);
+                           ("cols", `Int cols);
+                         ]))
+          with Unix.Unix_error (err, _, _) ->
+            Unix.close ic_read;
+            Unix.close ic_write;
+            Unix.close oc_read;
+            Unix.close oc_write;
+            Unix.close er_read;
+            Unix.close er_write;
+            Error ("Failed to launch headless binary: " ^ Unix.error_message err)
+          ))
+  | "headless_key" -> (
+      match require_session args "session" with
+      | Error e -> Error e
+      | Ok s -> (
+          match require_string args "key" with
+          | Error e -> Error e
+          | Ok key -> (
+              let cmd =
+                `Assoc [ ("cmd", `String "key"); ("key", `String key) ]
+              in
+              match headless_rpc s cmd with
+              | Error e -> Error e
+              | Ok json -> (
+                  match frame_of_json json with
+                  | Error e -> Error e
+                  | Ok text -> ok_result (`String text)))))
+  | "headless_click" -> (
+      match require_session args "session" with
+      | Error e -> Error e
+      | Ok s -> (
+          let row = match get_int args "row" with Some n -> n | None -> 0 in
+          let col = match get_int args "col" with Some n -> n | None -> 0 in
+          let button =
+            match get_string args "button" with Some b -> b | None -> "left"
+          in
+          let cmd =
+            `Assoc
+              [
+                ("cmd", `String "click");
+                ("row", `Int row);
+                ("col", `Int col);
+                ("button", `String button);
+              ]
+          in
+          match headless_rpc s cmd with
+          | Error e -> Error e
+          | Ok json -> (
+              match frame_of_json json with
+              | Error e -> Error e
+              | Ok text -> ok_result (`String text))))
+  | "headless_tick" -> (
+      match require_session args "session" with
+      | Error e -> Error e
+      | Ok s -> (
+          let n = match get_int args "n" with Some n -> n | None -> 1 in
+          let cmd = `Assoc [ ("cmd", `String "tick"); ("n", `Int n) ] in
+          match headless_rpc s cmd with
+          | Error e -> Error e
+          | Ok json -> (
+              match frame_of_json json with
+              | Error e -> Error e
+              | Ok text -> ok_result (`String text))))
+  | "headless_render" -> (
+      match require_session args "session" with
+      | Error e -> Error e
+      | Ok s -> (
+          let cmd = `Assoc [ ("cmd", `String "render") ] in
+          match headless_rpc s cmd with
+          | Error e -> Error e
+          | Ok json -> (
+              match frame_of_json json with
+              | Error e -> Error e
+              | Ok text -> ok_result (`String text))))
+  | "headless_stop" -> (
+      match require_session args "session" with
+      | Error e -> Error e
+      | Ok s ->
+          let sid =
+            match List.assoc_opt "session" args with
+            | Some (`String id) -> id
+            | _ -> ""
+          in
+          let cmd = `Assoc [ ("cmd", `String "quit") ] in
+          (try ignore (headless_rpc s cmd) with _ -> ());
+          (try close_in_noerr s.ic with _ -> ());
+          (try close_out_noerr s.oc with _ -> ());
+          (try ignore (Unix.waitpid [] s.pid) with _ -> ());
+          Hashtbl.remove headless_sessions sid;
+          ok_result (`Assoc [ ("message", `String "Session stopped") ]))
   | _ -> Error ("Unknown tool: " ^ tool_name)

@@ -10,6 +10,7 @@
  (depends
   (ocaml (>= 5.1))
   (miaou-core (>= 0.4))
+  (miaou-runner (>= 0.4))
   (yojson (>= 2.0))
   (eio (>= 1.0))
   (eio_main (>= 1.0))
