@@ -182,6 +182,30 @@ let page_of_json (json : Yojson.Safe.t) : (Page.t, string) result =
                       page.Page.state_bindings <-
                         List.filter_map parse_state_binding items
                   | _ -> ());
+                  (* Parse key handlers *)
+                  (match List.assoc_opt "key_handlers" fields with
+                  | Some (`List items) ->
+                      let handlers =
+                        List.filter_map
+                          (fun j ->
+                            match j with
+                            | `Assoc kf -> (
+                                let key = get_string kf "key" in
+                                if key = "" then None
+                                else
+                                  match List.assoc_opt "action" kf with
+                                  | Some action_json -> (
+                                      match
+                                        Action_codec.action_of_json action_json
+                                      with
+                                      | Ok action -> Some (key, action)
+                                      | Error _ -> None)
+                                  | None -> None)
+                            | _ -> None)
+                          items
+                      in
+                      page.Page.key_handlers <- handlers
+                  | _ -> ());
                   (* Initialize runtime state from schema *)
                   Page.init_state page;
                   Ok page
@@ -233,6 +257,17 @@ let page_to_json (page : Page.t) : Yojson.Safe.t =
   let state_bindings_json =
     `List (List.map state_binding_to_json page.Page.state_bindings)
   in
+  let key_handlers_json =
+    `List
+      (List.map
+         (fun (key, action) ->
+           `Assoc
+             [
+               ("key", `String key);
+               ("action", Action_codec.action_to_json action);
+             ])
+         page.Page.key_handlers)
+  in
   `Assoc
     [
       ("id", `String page.id);
@@ -244,4 +279,5 @@ let page_to_json (page : Page.t) : Yojson.Safe.t =
       );
       ("state_schema", state_schema_json);
       ("state_bindings", state_bindings_json);
+      ("key_handlers", key_handlers_json);
     ]

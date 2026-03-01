@@ -1,0 +1,91 @@
+{
+  "id": "composer",
+  "size": { "rows": 24, "cols": 120 },
+
+  "layout": {
+    "type": "flex",
+    "direction": "row",
+    "gap": 1,
+    "children": [
+      {
+        "type": "flex",
+        "direction": "column",
+        "gap": 1,
+        "basis": { "type": "px", "value": 28 },
+        "children": [
+          {
+            "type": "box",
+            "title": "Palette",
+            "style": "single",
+            "basis": "fill",
+            "child": {
+              "type": "list",
+              "id": "palette",
+              "items": [
+                "button", "checkbox", "textbox", "textarea",
+                "select", "radio", "switch",
+                "pager", "list", "description_list",
+                "flex-row", "flex-col", "box", "card"
+              ]
+            }
+          },
+          {
+            "type": "button",
+            "id": "add_btn",
+            "label": "[Enter] Add Widget"
+          }
+        ]
+      },
+      {
+        "type": "box",
+        "title": "Canvas",
+        "style": "single",
+        "basis": "fill",
+        "child": {
+          "type": "flex",
+          "direction": "column",
+          "gap": 1,
+          "children": []
+        }
+      },
+      {
+        "type": "box",
+        "title": "Info",
+        "style": "single",
+        "basis": { "type": "px", "value": 36 },
+        "child": {
+          "type": "pager",
+          "id": "info",
+          "text": "Canvas widgets: 0\nSelected: (none)\n\n Keys:\n [Tab]    Next pane\n [q]      Quit"
+        }
+      }
+    ]
+  },
+
+  "focus_ring": ["palette", "add_btn", "info"],
+
+  "wirings": [
+    {
+      "source": "palette",
+      "event": "select",
+      "action": {
+        "type": "copy_widget_to_state",
+        "key": "selected_type",
+        "source": "palette"
+      }
+    },
+    {
+      "source": "add_btn",
+      "event": "click",
+      "action": { "type": "emit", "event": "add_widget" }
+    }
+  ],
+
+  "state_schema": [
+    { "key": "selected_type", "type": "string", "default": "", "scope": "ephemeral" }
+  ],
+
+  "key_handlers": [
+    { "key": "q", "action": { "type": "quit" } }
+  ]
+}

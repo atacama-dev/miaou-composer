@@ -63,6 +63,7 @@ let make_root_layout () =
       justify = Clayout.Start;
       align_items = Clayout.Stretch;
       children = [];
+      basis = Clayout.Auto;
     }
 
 let make_palette_items () =
@@ -302,6 +303,7 @@ let add_container t ~container_type =
             justify = Clayout.Start;
             align_items = Clayout.Stretch;
             children = [];
+            basis = Clayout.Auto;
           }
     | "flex-col" ->
         Clayout.Flex
@@ -312,12 +314,13 @@ let add_container t ~container_type =
             justify = Clayout.Start;
             align_items = Clayout.Stretch;
             children = [];
+            basis = Clayout.Auto;
           }
     | "box" ->
         Clayout.Boxed
-          { title = None; style = Clayout.Single; padding = no_pad; child = None }
+          { title = None; style = Clayout.Single; padding = no_pad; child = None; basis = Clayout.Auto }
     | "card" ->
-        Clayout.Card { title = None; footer = None; accent = None; child = None }
+        Clayout.Card { title = None; footer = None; accent = None; child = None; basis = Clayout.Auto }
     | _ -> failwith ("Unknown container type: " ^ container_type)
   in
   let n_before =

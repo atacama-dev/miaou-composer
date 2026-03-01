@@ -132,6 +132,11 @@ let rec layout_of_json (json : Yojson.Safe.t) :
           let padding = padding_of_json fields in
           let justify = justify_of_string (get_string fields "justify") in
           let align_items = align_of_string (get_string fields "align_items") in
+          let basis =
+            match List.assoc_opt "basis" fields with
+            | Some b -> basis_of_json b
+            | None -> Layout_tree.Auto
+          in
           let children_json =
             match List.assoc_opt "children" fields with
             | Some (`List l) -> l
@@ -152,7 +157,7 @@ let rec layout_of_json (json : Yojson.Safe.t) :
                    children_results)
             in
             Ok
-              ( Flex { direction; gap; padding; justify; align_items; children },
+              ( Flex { direction; gap; padding; justify; align_items; children; basis },
                 List.concat widget_lists )
       | Some (`String "grid") ->
           let rows =
@@ -167,6 +172,11 @@ let rec layout_of_json (json : Yojson.Safe.t) :
           in
           let row_gap = get_int fields "row_gap" ~default:0 in
           let col_gap = get_int fields "col_gap" ~default:0 in
+          let basis =
+            match List.assoc_opt "basis" fields with
+            | Some b -> basis_of_json b
+            | None -> Layout_tree.Auto
+          in
           let children_json =
             match List.assoc_opt "children" fields with
             | Some (`List l) -> l
@@ -210,33 +220,43 @@ let rec layout_of_json (json : Yojson.Safe.t) :
                    children_results)
             in
             Ok
-              ( Grid { rows; cols; row_gap; col_gap; children },
+              ( Grid { rows; cols; row_gap; col_gap; children; basis },
                 List.concat widget_lists )
       | Some (`String "box") -> (
           let title = get_string_opt fields "title" in
           let style = border_style_of_string (get_string fields "style") in
           let padding = padding_of_json fields in
+          let basis =
+            match List.assoc_opt "basis" fields with
+            | Some b -> basis_of_json b
+            | None -> Layout_tree.Auto
+          in
           match List.assoc_opt "child" fields with
           | Some child_json -> (
               match layout_of_json child_json with
               | Ok (child, widgets) ->
                   Ok
-                    ( Boxed { title; style; padding; child = Some child },
+                    ( Boxed { title; style; padding; child = Some child; basis },
                       widgets )
               | Error e -> Error e)
-          | None -> Ok (Boxed { title; style; padding; child = None }, []))
+          | None -> Ok (Boxed { title; style; padding; child = None; basis }, []))
       | Some (`String "card") -> (
           let title = get_string_opt fields "title" in
           let footer = get_string_opt fields "footer" in
           let accent = get_int_opt fields "accent" in
+          let basis =
+            match List.assoc_opt "basis" fields with
+            | Some b -> basis_of_json b
+            | None -> Layout_tree.Auto
+          in
           match List.assoc_opt "child" fields with
           | Some child_json -> (
               match layout_of_json child_json with
               | Ok (child, widgets) ->
                   Ok
-                    (Card { title; footer; accent; child = Some child }, widgets)
+                    (Card { title; footer; accent; child = Some child; basis }, widgets)
               | Error e -> Error e)
-          | None -> Ok (Card { title; footer; accent; child = None }, []))
+          | None -> Ok (Card { title; footer; accent; child = None; basis }, []))
       | Some (`String typ) ->
           (* Must be a widget leaf *)
           let id = get_string fields "id" in
@@ -262,8 +282,8 @@ let rec layout_to_json node ~widget_to_json =
           | `Assoc fields -> `Assoc (fields @ [ ("basis", basis_to_json basis) ])
           | other -> other)
       | None -> `Assoc [ ("type", `String "unknown"); ("id", `String id) ])
-  | Flex { direction; gap; padding; justify; align_items; children } ->
-      `Assoc
+  | Flex { direction; gap; padding; justify; align_items; children; basis } ->
+      let base =
         [
           ("type", `String "flex");
           ("direction", `String (direction_to_string direction));
@@ -275,8 +295,15 @@ let rec layout_to_json node ~widget_to_json =
             `List
               (List.map (fun c -> layout_to_json c ~widget_to_json) children) );
         ]
-  | Grid { rows; cols; row_gap; col_gap; children } ->
-      `Assoc
+      in
+      let base =
+        match basis with
+        | Layout_tree.Auto -> base
+        | b -> base @ [ ("basis", basis_to_json b) ]
+      in
+      `Assoc base
+  | Grid { rows; cols; row_gap; col_gap; children; basis } ->
+      let base =
         [
           ("type", `String "grid");
           ("rows", `List (List.map track_to_json rows));
@@ -297,7 +324,14 @@ let rec layout_to_json node ~widget_to_json =
                      ])
                  children) );
         ]
-  | Boxed { title; style; padding; child } ->
+      in
+      let base =
+        match basis with
+        | Layout_tree.Auto -> base
+        | b -> base @ [ ("basis", basis_to_json b) ]
+      in
+      `Assoc base
+  | Boxed { title; style; padding; child; basis } ->
       let fields =
         [ ("type", `String "box") ]
         @ (match title with Some t -> [ ("title", `String t) ] | None -> [])
@@ -305,18 +339,24 @@ let rec layout_to_json node ~widget_to_json =
             ("style", `String (border_style_to_string style));
             ("padding", padding_to_json padding);
           ]
+        @ (match basis with
+           | Layout_tree.Auto -> []
+           | b -> [ ("basis", basis_to_json b) ])
         @
         match child with
         | Some c -> [ ("child", layout_to_json c ~widget_to_json) ]
         | None -> []
       in
       `Assoc fields
-  | Card { title; footer; accent; child } ->
+  | Card { title; footer; accent; child; basis } ->
       let fields =
         [ ("type", `String "card") ]
         @ (match title with Some t -> [ ("title", `String t) ] | None -> [])
         @ (match footer with Some f -> [ ("footer", `String f) ] | None -> [])
         @ (match accent with Some a -> [ ("accent", `Int a) ] | None -> [])
+        @ (match basis with
+           | Layout_tree.Auto -> []
+           | b -> [ ("basis", basis_to_json b) ])
         @
         match child with
         | Some c -> [ ("child", layout_to_json c ~widget_to_json) ]

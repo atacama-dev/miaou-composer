@@ -26,6 +26,7 @@ type t =
       justify : justify;
       align_items : align;
       mutable children : t list;
+      basis : basis;
     }
   | Grid of {
       rows : grid_track list;
@@ -33,18 +34,21 @@ type t =
       row_gap : int;
       col_gap : int;
       mutable children : (grid_placement * t) list;
+      basis : basis;
     }
   | Boxed of {
       title : string option;
       style : border_style;
       padding : padding;
       mutable child : t option;
+      basis : basis;
     }
   | Card of {
       title : string option;
       footer : string option;
       accent : int option;
       mutable child : t option;
+      basis : basis;
     }
 
 let no_padding = { left = 0; right = 0; top = 0; bottom = 0 }

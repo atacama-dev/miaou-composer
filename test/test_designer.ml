@@ -364,6 +364,114 @@ let test_designer_state_var_add_remove () =
   let schema2 = Designer_state.get_state_schema t'' in
   Alcotest.(check int) "zero state vars" 0 (List.length schema2)
 
+(* ---- US6: key_handlers + navigation events ---- *)
+
+let make_key_handler_page_json () =
+  {|{
+    "id": "kh",
+    "size": {"rows": 24, "cols": 80},
+    "layout": {
+      "type": "flex",
+      "direction": "column",
+      "children": [
+        {"type": "button", "id": "btn", "label": "OK"}
+      ]
+    },
+    "wirings": [],
+    "focus_ring": ["btn"],
+    "key_handlers": [
+      {"key": "q", "action": {"type": "quit"}},
+      {"key": "n", "action": {"type": "navigate", "target": "page2"}}
+    ]
+  }|}
+
+let test_key_handlers_parsed () =
+  let json = Yojson.Safe.from_string (make_key_handler_page_json ()) in
+  match Bridge.Page_codec.page_of_json json with
+  | Error e -> Alcotest.failf "page_of_json failed: %s" e
+  | Ok page ->
+      Alcotest.(check int)
+        "two key handlers" 2 (List.length page.Page.key_handlers);
+      let keys = List.map fst page.Page.key_handlers in
+      Alcotest.(check bool) "has q" true (List.mem "q" keys);
+      Alcotest.(check bool) "has n" true (List.mem "n" keys)
+
+let test_quit_key_emits_system_event () =
+  let json = Yojson.Safe.from_string (make_key_handler_page_json ()) in
+  match Bridge.Page_codec.page_of_json json with
+  | Error e -> Alcotest.failf "page_of_json failed: %s" e
+  | Ok page ->
+      let events = Page.send_key page ~key:"q" in
+      Alcotest.(check int) "one event" 1 (List.length events);
+      let ev = List.hd events in
+      Alcotest.(check string) "event is $quit" "$quit" ev.Page.name
+
+let test_navigate_key_emits_system_event () =
+  let json = Yojson.Safe.from_string (make_key_handler_page_json ()) in
+  match Bridge.Page_codec.page_of_json json with
+  | Error e -> Alcotest.failf "page_of_json failed: %s" e
+  | Ok page ->
+      let events = Page.send_key page ~key:"n" in
+      Alcotest.(check int) "one event" 1 (List.length events);
+      let ev = List.hd events in
+      Alcotest.(check string) "event is $navigate" "$navigate" ev.Page.name;
+      Alcotest.(check bool)
+        "snapshot has target" true
+        (ev.Page.snapshot = `String "page2")
+
+let test_key_handler_blocks_tab () =
+  (* Tab is wired as a key_handler; it should NOT cycle focus *)
+  let json =
+    Yojson.Safe.from_string
+      {|{
+        "id": "t",
+        "size": {"rows": 24, "cols": 80},
+        "layout": {
+          "type": "flex",
+          "direction": "row",
+          "children": [
+            {"type": "button", "id": "a", "label": "A"},
+            {"type": "button", "id": "b", "label": "B"}
+          ]
+        },
+        "wirings": [],
+        "focus_ring": ["a", "b"],
+        "key_handlers": [
+          {"key": "Tab", "action": {"type": "emit", "event": "tab_pressed"}}
+        ]
+      }|}
+  in
+  match Bridge.Page_codec.page_of_json json with
+  | Error e -> Alcotest.failf "page_of_json failed: %s" e
+  | Ok page ->
+      let focused_before =
+        Miaou_internals.Focus_ring.current page.Page.focus_ring
+      in
+      let events = Page.send_key page ~key:"Tab" in
+      let focused_after =
+        Miaou_internals.Focus_ring.current page.Page.focus_ring
+      in
+      (* focus should NOT have changed because key_handler consumed Tab *)
+      Alcotest.(check bool) "focus unchanged" true (focused_before = focused_after);
+      Alcotest.(check int) "one event" 1 (List.length events);
+      Alcotest.(check string)
+        "emits tab_pressed" "tab_pressed" (List.hd events).Page.name
+
+let test_key_handlers_roundtrip () =
+  let json = Yojson.Safe.from_string (make_key_handler_page_json ()) in
+  match Bridge.Page_codec.page_of_json json with
+  | Error e -> Alcotest.failf "page_of_json failed: %s" e
+  | Ok page ->
+      let exported = Bridge.Page_codec.page_to_json page in
+      match exported with
+      | `Assoc fields -> (
+          match List.assoc_opt "key_handlers" fields with
+          | Some (`List khs) ->
+              Alcotest.(check int)
+                "two key_handlers in export" 2 (List.length khs)
+          | _ -> Alcotest.fail "key_handlers missing from export")
+      | _ -> Alcotest.fail "export is not an object"
+
 (* ---- Runner ---- *)
 
 let () =
@@ -415,5 +523,18 @@ let () =
             test_state_roundtrip;
           Alcotest.test_case "designer add/remove var" `Quick
             test_designer_state_var_add_remove;
+        ] );
+      ( "US6: key_handlers",
+        [
+          Alcotest.test_case "handlers parsed" `Quick
+            test_key_handlers_parsed;
+          Alcotest.test_case "quit key emits $quit" `Quick
+            test_quit_key_emits_system_event;
+          Alcotest.test_case "navigate key emits $navigate" `Quick
+            test_navigate_key_emits_system_event;
+          Alcotest.test_case "handler blocks Tab" `Quick
+            test_key_handler_blocks_tab;
+          Alcotest.test_case "roundtrip key_handlers" `Quick
+            test_key_handlers_roundtrip;
         ] );
     ]

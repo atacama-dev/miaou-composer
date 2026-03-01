@@ -31,6 +31,7 @@ type t = {
   mutable state_schema : state_var list;
   mutable state_bindings : state_binding list;
   state : (string, Yojson.Safe.t) Hashtbl.t;
+  mutable key_handlers : (string * Action.t) list;
 }
 
 type emit_event = { name : string; snapshot : Yojson.Safe.t }
@@ -50,6 +51,7 @@ let create ~id ~layout ~size =
     state_schema = [];
     state_bindings = [];
     state;
+    key_handlers = [];
   }
 
 let persistent_state_path page = page.id ^ ".state.json"
@@ -88,8 +90,14 @@ let init_state page =
    with _ -> ())
 
 let rebuild_focus page =
-  page.focus_ring <-
+  let current = Focus_ring.current page.focus_ring in
+  let new_ring =
     Focus_manager.rebuild ~layout_tree:page.layout ~widgets:page.widgets
+  in
+  page.focus_ring <-
+    (match current with
+    | Some id -> Focus_ring.focus new_ring id
+    | None -> new_ring)
 
 let add_widget page ~id ~widget_box ~path ~position =
   if Hashtbl.mem page.widgets id then Error ("Duplicate widget ID: " ^ id)
@@ -144,7 +152,21 @@ let reset_page_state page =
     page.state_schema
 
 let render page =
-  let rec render_node node =
+  let node_basis = function
+    | Layout_tree.Leaf { basis; _ } -> basis
+    | Layout_tree.Flex { basis; _ } -> basis
+    | Layout_tree.Boxed { basis; _ } -> basis
+    | Layout_tree.Card { basis; _ } -> basis
+    | Layout_tree.Grid { basis; _ } -> basis
+  in
+  let to_flex_basis = function
+    | Layout_tree.Auto -> Flex_layout.Auto
+    | Layout_tree.Fill -> Flex_layout.Fill
+    | Layout_tree.Px n -> Flex_layout.Px n
+    | Layout_tree.Ratio r -> Flex_layout.Ratio r
+    | Layout_tree.Percent p -> Flex_layout.Percent p
+  in
+  let rec render_node ~size node =
     match node with
     | Layout_tree.Leaf { id; _ } -> (
         match Hashtbl.find_opt page.widgets id with
@@ -154,7 +176,7 @@ let render page =
               | Some fid -> fid = id
               | None -> false
             in
-            Widget_box.render wb ~focus:is_focused ~size:page.size
+            Widget_box.render wb ~focus:is_focused ~size
         | None -> "")
     | Layout_tree.Flex { direction; gap; children; padding; _ } ->
         let dir =
@@ -166,8 +188,8 @@ let render page =
           List.map
             (fun child ->
               {
-                Flex_layout.render = (fun ~size:_ -> render_node child);
-                basis = Flex_layout.Auto;
+                Flex_layout.render = (fun ~size -> render_node ~size child);
+                basis = to_flex_basis (node_basis child);
                 cross = None;
               })
             children
@@ -185,8 +207,8 @@ let render page =
             ~gap:{ Flex_layout.h = gap; v = gap }
             ~padding:flex_padding flex_children
         in
-        Flex_layout.render layout ~size:page.size
-    | Layout_tree.Grid { rows; cols; row_gap; col_gap; children } ->
+        Flex_layout.render layout ~size
+    | Layout_tree.Grid { rows; cols; row_gap; col_gap; children; _ } ->
         let convert_track = function
           | Layout_tree.TPx n -> Grid_layout.Px n
           | Layout_tree.TFr f -> Grid_layout.Fr f
@@ -198,8 +220,8 @@ let render page =
           List.map
             (fun (p, child) ->
               Grid_layout.span ~row:p.Layout_tree.row ~col:p.col
-                ~row_span:p.row_span ~col_span:p.col_span (fun ~size:_ ->
-                  render_node child))
+                ~row_span:p.row_span ~col_span:p.col_span (fun ~size ->
+                  render_node ~size child))
             children
         in
         let layout =
@@ -208,9 +230,21 @@ let render page =
             ~cols:(List.map convert_track cols)
             ~row_gap ~col_gap grid_children
         in
-        Grid_layout.render layout ~size:page.size
-    | Layout_tree.Boxed { title; style; padding; child } ->
-        let content = match child with Some c -> render_node c | None -> "" in
+        Grid_layout.render layout ~size
+    | Layout_tree.Boxed { title; style; padding; child; _ } ->
+        let border_w = 2 in
+        let border_h = 2 in
+        let inner_size =
+          {
+            LTerm_geom.rows =
+              max 0 (size.LTerm_geom.rows - border_h - padding.top - padding.bottom);
+            cols =
+              max 0 (size.LTerm_geom.cols - border_w - padding.left - padding.right);
+          }
+        in
+        let content =
+          match child with Some c -> render_node ~size:inner_size c | None -> ""
+        in
         let box_style =
           match style with
           | Layout_tree.None_ -> Box_widget.None_
@@ -228,13 +262,18 @@ let render page =
               top = padding.top;
               bottom = padding.bottom;
             }
-          ~width:page.size.cols content
+          ~width:size.LTerm_geom.cols content
     | Layout_tree.Card { title; footer; child; _ } ->
-        let body = match child with Some c -> render_node c | None -> "" in
+        let inner_size =
+          { size with LTerm_geom.cols = max 0 (size.LTerm_geom.cols - 2) }
+        in
+        let body =
+          match child with Some c -> render_node ~size:inner_size c | None -> ""
+        in
         let card = Card_widget.create ?title ?footer ~body () in
-        Card_widget.render card ~cols:page.size.cols
+        Card_widget.render card ~cols:size.LTerm_geom.cols
   in
-  render_node page.layout
+  render_node ~size:page.size page.layout
 
 (** Execute a single action on the page. Returns emitted events. *)
 let rec execute_action page (action : Action.t) : emit_event list =
@@ -316,9 +355,10 @@ let rec execute_action page (action : Action.t) : emit_event list =
       (* Modal handling is done at the session/MCP level *)
       []
   | Close_modal _ -> []
-  | Navigate _ -> []
-  | Back -> []
-  | Quit -> []
+  | Navigate { target } ->
+      [ { name = "$navigate"; snapshot = `String target } ]
+  | Back -> [ { name = "$back"; snapshot = `Null } ]
+  | Quit -> [ { name = "$quit"; snapshot = `Null } ]
   | Set_state { key; value } ->
       set_state_value page ~key ~value;
       []
@@ -337,7 +377,10 @@ let rec execute_action page (action : Action.t) : emit_event list =
                     | None -> (
                         match List.assoc_opt "checked" fields with
                         | Some v -> v
-                        | None -> `String "")))
+                        | None -> (
+                            match List.assoc_opt "selected" fields with
+                            | Some v -> v
+                            | None -> `String ""))))
             | _ -> `String ""
           in
           set_state_value page ~key ~value
@@ -386,37 +429,47 @@ and query_all_state page =
   `Assoc widgets
 
 (** Send a key to the focused widget, detect events, execute wirings. Returns
-    (emitted_events). *)
+    (emitted_events). Page-level key_handlers are checked first. *)
 let send_key page ~key =
   let emitted = ref [] in
-  (* Handle Tab/Shift-Tab for focus cycling *)
-  (match key with
-  | "Tab" | "S-Tab" ->
-      let ring', _result = Focus_ring.handle_key page.focus_ring ~key in
-      page.focus_ring <- ring'
-  | _ -> (
-      match Focus_ring.current page.focus_ring with
-      | None -> ()
-      | Some focused_id -> (
-          match Hashtbl.find_opt page.widgets focused_id with
-          | None -> ()
-          | Some wb ->
-              let wb', _handled, events =
-                Widget_box.on_key_with_events wb ~key
-              in
-              Hashtbl.replace page.widgets focused_id wb';
-              (* Process events through wirings *)
-              List.iter
-                (fun (event_name, _event_data) ->
-                  match
-                    Wiring.find page.wirings ~source:focused_id
-                      ~event:event_name
-                  with
-                  | Some action ->
-                      let evts = execute_action page action in
-                      emitted := !emitted @ evts
-                  | None -> ())
-                events)));
+  (* Check page-level key handlers first *)
+  let key_handled =
+    match List.assoc_opt key page.key_handlers with
+    | Some action ->
+        let evts = execute_action page action in
+        emitted := !emitted @ evts;
+        true
+    | None -> false
+  in
+  if not key_handled then
+    (* Handle Tab/Shift-Tab for focus cycling *)
+    (match key with
+    | "Tab" | "S-Tab" ->
+        let ring', _result = Focus_ring.handle_key page.focus_ring ~key in
+        page.focus_ring <- ring'
+    | _ -> (
+        match Focus_ring.current page.focus_ring with
+        | None -> ()
+        | Some focused_id -> (
+            match Hashtbl.find_opt page.widgets focused_id with
+            | None -> ()
+            | Some wb ->
+                let wb', _handled, events =
+                  Widget_box.on_key_with_events wb ~key
+                in
+                Hashtbl.replace page.widgets focused_id wb';
+                (* Process events through wirings *)
+                List.iter
+                  (fun (event_name, _event_data) ->
+                    match
+                      Wiring.find page.wirings ~source:focused_id
+                        ~event:event_name
+                    with
+                    | Some action ->
+                        let evts = execute_action page action in
+                        emitted := !emitted @ evts
+                    | None -> ())
+                  events)));
   !emitted
 
 let query_focus page =

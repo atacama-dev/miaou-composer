@@ -294,22 +294,25 @@ let box_pager ?(title = "") ~text () =
               ("line_count", `Int (List.length w.lines));
             ]);
       update =
-        (fun w patch ->
+        (fun _w patch ->
           match patch with
           | `Assoc fields -> (
               match List.assoc_opt "text" fields with
-              | Some (`String t) ->
-                  Pager_widget.append_text w t;
-                  w
-              | _ -> w)
-          | _ -> w);
+              | Some (`String t) -> Pager_widget.open_text ~title t
+              | Some `Null -> Pager_widget.open_text ~title ""
+              | _ -> _w)
+          | _ -> _w);
       detect_events = (fun _old _new -> []);
       focusable = true;
     }
 
-let box_list ~items ?(indent = 2) ?(expand_all = false) () =
-  let make_items strs = List.map (fun s -> List_widget.item s) strs in
-  let w = List_widget.create ~indent ~expand_all (make_items items) in
+let box_list ~items ?(item_overrides : List_widget.item list option) ?(indent = 2) ?(expand_all = false) () =
+  let actual_items =
+    match item_overrides with
+    | Some defs -> defs
+    | None -> List.map (fun s -> List_widget.item s) items
+  in
+  let w = List_widget.create ~indent ~expand_all actual_items in
   Box
     {
       type_name = "list";

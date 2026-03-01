@@ -88,7 +88,31 @@ let create_widget (json : Yojson.Safe.t) :
             let items = get_string_list fields "items" in
             let indent = get_int fields "indent" ~default:2 in
             let expand_all = get_bool fields "expand_all" ~default:false in
-            Ok (id, Widget_registry.box_list ~items ~indent ~expand_all ())
+            let item_overrides =
+              match List.assoc_opt "groups" fields with
+              | Some (`List groups) ->
+                  let module LW = Miaou_widgets_display.List_widget in
+                  Some
+                    (List.concat_map
+                       (fun g ->
+                         match g with
+                         | `Assoc gf ->
+                             let label = get_string gf "label" in
+                             let citems = get_string_list gf "items" in
+                             [
+                               LW.group label
+                                 (List.map
+                                    (fun s -> LW.item ~id:s ~selectable:true s)
+                                    citems);
+                             ]
+                         | _ -> [])
+                       groups)
+              | _ -> None
+            in
+            Ok
+              ( id,
+                Widget_registry.box_list ~items ?item_overrides ~indent
+                  ~expand_all () )
         | "description_list" ->
             let title = get_string fields "title" in
             let items = get_string_list fields "items" in
