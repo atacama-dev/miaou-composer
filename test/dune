@@ -1,0 +1,8 @@
+(test
+ (name test_compositor)
+ (libraries
+  alcotest
+  miaou_composer_lib
+  miaou_composer_bridge
+  miaou_composer_export
+  yojson))

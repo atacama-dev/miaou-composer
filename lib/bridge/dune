@@ -1,0 +1,11 @@
+(library
+ (name miaou_composer_bridge)
+ (libraries
+  miaou_composer_lib
+  miaou-core.widgets.input
+  miaou-core.widgets.display
+  miaou-core.widgets.layout
+  miaou-core.internals
+  miaou-core.interfaces
+  yojson
+  lambda-term))
