@@ -155,36 +155,128 @@ let make_for_existing_widget widget_id widget_type params_json =
         }
 
 let make_wiring_action_form action_type widget_ids =
-  let needs_target =
-    match action_type with "back" | "quit" -> false | _ -> true
-  in
-  let needs_value =
+  let is_state_action =
     match action_type with
-    | "set_text" | "append_text" | "navigate" -> true
-    | "set_checked" | "set_disabled" -> true
+    | "set_state" | "copy_widget_to_state" | "inc_state" | "reset_state" ->
+        true
     | _ -> false
   in
-  let target_field =
-    if needs_target then
-      [
-        make_text_field "target" "Target Widget ID" ~required:true
-          ~placeholder:(String.concat "|" widget_ids)
-          (List.nth_opt widget_ids 0 |> Option.value ~default:"");
-      ]
-    else []
-  in
-  let value_field =
-    if needs_value then
-      [ make_text_field "value" "Value" ~required:true ~placeholder:"" "" ]
-    else []
-  in
+  if is_state_action then
+    let key_field =
+      make_text_field "key" "State Key" ~required:true ~placeholder:"e.g. count"
+        ""
+    in
+    let extra_fields =
+      match action_type with
+      | "set_state" ->
+          [
+            make_text_field "value" "Value (JSON)" ~required:true
+              ~placeholder:"e.g. 0 or \"hello\"" "";
+          ]
+      | "copy_widget_to_state" ->
+          [
+            make_text_field "source" "Source Widget ID" ~required:true
+              ~placeholder:(String.concat "|" widget_ids)
+              (List.nth_opt widget_ids 0 |> Option.value ~default:"");
+          ]
+      | "inc_state" ->
+          [ make_text_field "by" "Increment By" ~required:false ~placeholder:"1" "1" ]
+      | "reset_state" -> []
+      | _ -> []
+    in
+    {
+      title = Printf.sprintf "Configure: %s" action_type;
+      fields = Array.of_list (key_field :: extra_fields);
+      focused = 0;
+      errors = [];
+      submitted = false;
+    }
+  else
+    let needs_target =
+      match action_type with "back" | "quit" -> false | _ -> true
+    in
+    let needs_value =
+      match action_type with
+      | "set_text" | "append_text" | "navigate" -> true
+      | "set_checked" | "set_disabled" -> true
+      | _ -> false
+    in
+    let target_field =
+      if needs_target then
+        [
+          make_text_field "target" "Target Widget ID" ~required:true
+            ~placeholder:(String.concat "|" widget_ids)
+            (List.nth_opt widget_ids 0 |> Option.value ~default:"");
+        ]
+      else []
+    in
+    let value_field =
+      if needs_value then
+        [ make_text_field "value" "Value" ~required:true ~placeholder:"" "" ]
+      else []
+    in
+    {
+      title = Printf.sprintf "Configure: %s" action_type;
+      fields = Array.of_list (target_field @ value_field);
+      focused = 0;
+      errors = [];
+      submitted = false;
+    }
+
+(** Make a form for adding/editing a state variable. *)
+let make_state_var_form ?(key = "") ?(typ = "int") ?(default = "0")
+    ?(scope = "ephemeral") () =
   {
-    title = Printf.sprintf "Configure: %s" action_type;
-    fields = Array.of_list (target_field @ value_field);
+    title = "State Variable";
+    fields =
+      [|
+        make_text_field "key" "Key" ~required:true ~placeholder:"e.g. count" key;
+        make_text_field "type" "Type" ~required:false
+          ~placeholder:"string|bool|int|float|json" typ;
+        make_text_field "default" "Default (JSON)" ~required:false
+          ~placeholder:"e.g. 0 or \"\"" default;
+        make_text_field "scope" "Scope" ~required:false
+          ~placeholder:"ephemeral|persistent" scope;
+      |];
     focused = 0;
     errors = [];
     submitted = false;
   }
+
+(** Parse a state variable form into a Page.state_var. *)
+let form_to_state_var t =
+  let get name =
+    match
+      Array.find_opt (fun f -> f.name = name) t.fields
+    with
+    | Some { kind = Text s; _ } -> s
+    | _ -> ""
+  in
+  let key = get "key" in
+  if key = "" then None
+  else
+    let typ_str = get "type" in
+    let typ =
+      match typ_str with
+      | "bool" -> `Bool
+      | "int" -> `Int
+      | "float" -> `Float
+      | "json" -> `Json
+      | _ -> `String
+    in
+    let default_str = get "default" in
+    let default =
+      (* Try to parse as JSON; fall back to string or null *)
+      (try Yojson.Safe.from_string default_str
+       with _ ->
+         if default_str = "" then `Null else `String default_str)
+    in
+    let scope_str = get "scope" in
+    let scope =
+      if scope_str = "persistent" then Miaou_composer_lib.Page.Persistent
+      else Miaou_composer_lib.Page.Ephemeral
+    in
+    Some { Miaou_composer_lib.Page.key; typ; default; scope }
 
 let move_focus t delta =
   let n = Array.length t.fields in
@@ -273,6 +365,11 @@ let get_action_target t =
 
 let get_action_value t =
   match Array.find_opt (fun f -> f.name = "value") t.fields with
+  | Some { kind = Text s; _ } -> s
+  | _ -> ""
+
+let get_field t name =
+  match Array.find_opt (fun f -> f.name = name) t.fields with
   | Some { kind = Text s; _ } -> s
   | _ -> ""
 

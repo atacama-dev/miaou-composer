@@ -68,6 +68,25 @@ let action_to_json (a : Action.t) : Yojson.Safe.t =
           ("target", `String target);
           ("items", `List (List.map (fun s -> `String s) items));
         ]
+  | Set_state { key; value } ->
+      `Assoc
+        [ ("type", `String "set_state"); ("key", `String key); ("value", value) ]
+  | Copy_widget_to_state { key; source } ->
+      `Assoc
+        [
+          ("type", `String "copy_widget_to_state");
+          ("key", `String key);
+          ("source", `String source);
+        ]
+  | Inc_state { key; by } ->
+      `Assoc
+        [
+          ("type", `String "inc_state");
+          ("key", `String key);
+          ("by", `Float by);
+        ]
+  | Reset_state { key } ->
+      `Assoc [ ("type", `String "reset_state"); ("key", `String key) ]
 
 let get_string fields key =
   match List.assoc_opt key fields with Some (`String s) -> s | _ -> ""
@@ -82,6 +101,15 @@ let get_string_list fields key =
         (fun j -> match j with `String s -> Some s | _ -> None)
         items
   | _ -> []
+
+let get_float fields key ~default =
+  match List.assoc_opt key fields with
+  | Some (`Float f) -> f
+  | Some (`Int n) -> float_of_int n
+  | _ -> default
+
+let get_json fields key =
+  match List.assoc_opt key fields with Some v -> v | None -> `Null
 
 let action_of_json (json : Yojson.Safe.t) : (Action.t, string) result =
   match json with
@@ -152,6 +180,29 @@ let action_of_json (json : Yojson.Safe.t) : (Action.t, string) result =
                  target = get_string fields "target";
                  items = get_string_list fields "items";
                })
+      | Some (`String "set_state") ->
+          Ok
+            (Set_state
+               {
+                 key = get_string fields "key";
+                 value = get_json fields "value";
+               })
+      | Some (`String "copy_widget_to_state") ->
+          Ok
+            (Copy_widget_to_state
+               {
+                 key = get_string fields "key";
+                 source = get_string fields "source";
+               })
+      | Some (`String "inc_state") ->
+          Ok
+            (Inc_state
+               {
+                 key = get_string fields "key";
+                 by = get_float fields "by" ~default:1.0;
+               })
+      | Some (`String "reset_state") ->
+          Ok (Reset_state { key = get_string fields "key" })
       | Some (`String t) -> Error ("Unknown action type: " ^ t)
       | _ -> Error "Action must have a 'type' field")
   | _ -> Error "Action must be an object"

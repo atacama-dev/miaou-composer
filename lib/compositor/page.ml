@@ -6,6 +6,21 @@ module Grid_layout = Miaou_widgets_layout.Grid_layout
 module Box_widget = Miaou_widgets_layout.Box_widget
 module Card_widget = Miaou_widgets_layout.Card_widget
 
+type state_scope = Ephemeral | Persistent
+
+type state_var = {
+  key : string;
+  typ : [ `String | `Bool | `Int | `Float | `Json ];
+  default : Yojson.Safe.t;
+  scope : state_scope;
+}
+
+type state_binding = {
+  key : string;
+  widget_id : string;
+  prop : string;
+}
+
 type t = {
   id : string;
   mutable layout : Layout_tree.t;
@@ -13,15 +28,64 @@ type t = {
   mutable focus_ring : Focus_ring.t;
   wirings : Wiring.t;
   mutable size : LTerm_geom.size;
+  mutable state_schema : state_var list;
+  mutable state_bindings : state_binding list;
+  state : (string, Yojson.Safe.t) Hashtbl.t;
 }
 
-type emit_event = { name : string; state : Yojson.Safe.t }
+type emit_event = { name : string; snapshot : Yojson.Safe.t }
 
 let create ~id ~layout ~size =
   let widgets = Hashtbl.create 16 in
   let wirings = Wiring.create () in
   let focus_ring = Focus_ring.create [] in
-  { id; layout; widgets; focus_ring; wirings; size }
+  let state = Hashtbl.create 8 in
+  {
+    id;
+    layout;
+    widgets;
+    focus_ring;
+    wirings;
+    size;
+    state_schema = [];
+    state_bindings = [];
+    state;
+  }
+
+let persistent_state_path page = page.id ^ ".state.json"
+
+let save_persistent_state page =
+  let path = persistent_state_path page in
+  let pairs =
+    List.filter_map
+      (fun (sv : state_var) ->
+        if sv.scope = Persistent then
+          match Hashtbl.find_opt page.state sv.key with
+          | Some v -> Some (sv.key, v)
+          | None -> None
+        else None)
+      page.state_schema
+  in
+  if pairs <> [] then
+    (try Yojson.Safe.to_file path (`Assoc pairs) with _ -> ())
+
+let init_state page =
+  List.iter
+    (fun (sv : state_var) -> Hashtbl.replace page.state sv.key sv.default)
+    page.state_schema;
+  let path = persistent_state_path page in
+  (try
+     match Yojson.Safe.from_file path with
+     | `Assoc fields ->
+         List.iter
+           (fun (sv : state_var) ->
+             if sv.scope = Persistent then
+               match List.assoc_opt sv.key fields with
+               | Some v -> Hashtbl.replace page.state sv.key v
+               | None -> ())
+           page.state_schema
+     | _ -> ()
+   with _ -> ())
 
 let rebuild_focus page =
   page.focus_ring <-
@@ -56,6 +120,28 @@ let update_widget page ~id ~patch =
   | Some wb ->
       Hashtbl.replace page.widgets id (Widget_box.update wb patch);
       Ok ()
+
+let set_state_value page ~key ~value =
+  Hashtbl.replace page.state key value;
+  List.iter
+    (fun (b : state_binding) ->
+      if b.key = key then
+        ignore
+          (update_widget page ~id:b.widget_id
+             ~patch:(`Assoc [ (b.prop, value) ])))
+    page.state_bindings;
+  (match
+     List.find_opt (fun (sv : state_var) -> sv.key = key) page.state_schema
+   with
+  | Some sv when sv.scope = Persistent -> save_persistent_state page
+  | _ -> ())
+
+let reset_page_state page =
+  List.iter
+    (fun (sv : state_var) ->
+      if sv.scope = Ephemeral then
+        set_state_value page ~key:sv.key ~value:sv.default)
+    page.state_schema
 
 let render page =
   let rec render_node node =
@@ -224,8 +310,8 @@ let rec execute_action page (action : Action.t) : emit_event list =
              (`Assoc [ ("items", `List (List.map (fun s -> `String s) items)) ]));
       []
   | Emit { event } ->
-      let state = query_all_state page in
-      [ { name = event; state } ]
+      let snapshot = query_all_state page in
+      [ { name = event; snapshot } ]
   | Push_modal _ ->
       (* Modal handling is done at the session/MCP level *)
       []
@@ -233,6 +319,56 @@ let rec execute_action page (action : Action.t) : emit_event list =
   | Navigate _ -> []
   | Back -> []
   | Quit -> []
+  | Set_state { key; value } ->
+      set_state_value page ~key ~value;
+      []
+  | Copy_widget_to_state { key; source } ->
+      (match Hashtbl.find_opt page.widgets source with
+      | Some wb ->
+          let wstate = Widget_box.query wb in
+          let value =
+            match wstate with
+            | `Assoc fields -> (
+                match List.assoc_opt "text" fields with
+                | Some v -> v
+                | None -> (
+                    match List.assoc_opt "value" fields with
+                    | Some v -> v
+                    | None -> (
+                        match List.assoc_opt "checked" fields with
+                        | Some v -> v
+                        | None -> `String "")))
+            | _ -> `String ""
+          in
+          set_state_value page ~key ~value
+      | None -> ());
+      []
+  | Inc_state { key; by } ->
+      let current =
+        match Hashtbl.find_opt page.state key with
+        | Some (`Int n) -> float_of_int n
+        | Some (`Float f) -> f
+        | _ -> 0.0
+      in
+      let new_val = current +. by in
+      let value =
+        match
+          List.find_opt (fun (sv : state_var) -> sv.key = key)
+            page.state_schema
+        with
+        | Some sv when sv.typ = `Int -> `Int (int_of_float new_val)
+        | _ -> `Float new_val
+      in
+      set_state_value page ~key ~value;
+      []
+  | Reset_state { key } ->
+      (match
+         List.find_opt (fun (sv : state_var) -> sv.key = key)
+           page.state_schema
+       with
+      | Some sv -> set_state_value page ~key ~value:sv.default
+      | None -> ());
+      []
 
 and query_all_state page =
   let widgets =

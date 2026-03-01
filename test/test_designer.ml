@@ -217,6 +217,153 @@ let test_form_duplicate_id_rejected () =
       | Ok () -> Alcotest.fail "Expected duplicate ID error"
       | Error _ -> ())
 
+(* ---- US5: Page state ---- *)
+
+module Page = Miaou_composer_lib.Page
+module Bridge = Miaou_composer_bridge
+module Action = Miaou_composer_lib.Action
+
+let make_state_page_json () =
+  {|{
+    "id": "sp",
+    "size": {"rows": 24, "cols": 80},
+    "state_schema": [
+      {"key": "count",   "type": "int",  "default": 0,     "scope": "ephemeral"},
+      {"key": "name",    "type": "string","default": "",   "scope": "persistent"},
+      {"key": "enabled", "type": "bool", "default": false, "scope": "ephemeral"}
+    ],
+    "state_bindings": [
+      {"key": "enabled", "widget_id": "chk", "prop": "checked"}
+    ],
+    "layout": {
+      "type": "flex",
+      "direction": "column",
+      "children": [
+        {"type": "button",   "id": "btn", "label": "Inc"},
+        {"type": "checkbox", "id": "chk", "label": "Active", "checked": false}
+      ]
+    },
+    "wirings": [],
+    "focus_ring": []
+  }|}
+
+let test_state_schema_parsed () =
+  let json = Yojson.Safe.from_string (make_state_page_json ()) in
+  match Bridge.Page_codec.page_of_json json with
+  | Error e -> Alcotest.failf "page_of_json failed: %s" e
+  | Ok page ->
+      Alcotest.(check int)
+        "three state vars" 3 (List.length page.Page.state_schema);
+      let sv = List.hd page.Page.state_schema in
+      Alcotest.(check string) "first key is count" "count" sv.Page.key;
+      Alcotest.(check bool)
+        "first scope is ephemeral" true
+        (sv.Page.scope = Page.Ephemeral)
+
+let test_set_state_action () =
+  let json = Yojson.Safe.from_string (make_state_page_json ()) in
+  match Bridge.Page_codec.page_of_json json with
+  | Error e -> Alcotest.failf "page_of_json failed: %s" e
+  | Ok page ->
+      ignore
+        (Page.execute_action page
+           (Action.Set_state { key = "count"; value = `Int 42 }));
+      let v = Hashtbl.find_opt page.Page.state "count" in
+      Alcotest.(check bool) "state updated" true (v = Some (`Int 42))
+
+let test_state_binding_sync () =
+  let json = Yojson.Safe.from_string (make_state_page_json ()) in
+  match Bridge.Page_codec.page_of_json json with
+  | Error e -> Alcotest.failf "page_of_json failed: %s" e
+  | Ok page ->
+      (* Binding: enabled -> chk.checked *)
+      ignore
+        (Page.execute_action page
+           (Action.Set_state { key = "enabled"; value = `Bool true }));
+      (* State key updated *)
+      let state_val = Hashtbl.find_opt page.Page.state "enabled" in
+      Alcotest.(check bool) "state key updated" true
+        (state_val = Some (`Bool true));
+      (* Widget chk.checked should be true *)
+      let chk_state =
+        match Hashtbl.find_opt page.Page.widgets "chk" with
+        | Some wb -> Miaou_composer_lib.Widget_box.query wb
+        | None -> `Null
+      in
+      let checked_val =
+        match chk_state with
+        | `Assoc fields -> (
+            match List.assoc_opt "checked" fields with
+            | Some v -> v
+            | None -> `Null)
+        | _ -> `Null
+      in
+      Alcotest.(check bool) "bound widget updated" true
+        (checked_val = `Bool true)
+
+let test_inc_state_action () =
+  let json = Yojson.Safe.from_string (make_state_page_json ()) in
+  match Bridge.Page_codec.page_of_json json with
+  | Error e -> Alcotest.failf "page_of_json failed: %s" e
+  | Ok page ->
+      ignore
+        (Page.execute_action page
+           (Action.Inc_state { key = "count"; by = 1.0 }));
+      let v = Hashtbl.find_opt page.Page.state "count" in
+      (* count is `Int type; 0 + 1 = 1 *)
+      Alcotest.(check bool) "inc_state updated" true (v = Some (`Int 1))
+
+let test_reset_state_action () =
+  let json = Yojson.Safe.from_string (make_state_page_json ()) in
+  match Bridge.Page_codec.page_of_json json with
+  | Error e -> Alcotest.failf "page_of_json failed: %s" e
+  | Ok page ->
+      ignore
+        (Page.execute_action page
+           (Action.Set_state { key = "count"; value = `Int 99 }));
+      ignore
+        (Page.execute_action page (Action.Reset_state { key = "count" }));
+      let v = Hashtbl.find_opt page.Page.state "count" in
+      Alcotest.(check bool) "reset to default" true (v = Some (`Int 0))
+
+let test_state_roundtrip () =
+  let json = Yojson.Safe.from_string (make_state_page_json ()) in
+  match Bridge.Page_codec.page_of_json json with
+  | Error e -> Alcotest.failf "page_of_json failed: %s" e
+  | Ok page ->
+      let out_json = Bridge.Page_codec.page_to_json page in
+      let schema_field =
+        match out_json with
+        | `Assoc fields -> List.assoc_opt "state_schema" fields
+        | _ -> None
+      in
+      Alcotest.(check bool)
+        "state_schema in output" true
+        (match schema_field with
+        | Some (`List items) -> List.length items = 3
+        | _ -> false)
+
+let test_designer_state_var_add_remove () =
+  let t = fresh () in
+  let sv : Miaou_composer_lib.Page.state_var =
+    {
+      key = "counter";
+      typ = `Int;
+      default = `Int 0;
+      scope = Miaou_composer_lib.Page.Ephemeral;
+    }
+  in
+  let t' = Designer_state.add_state_var t sv in
+  let schema = Designer_state.get_state_schema t' in
+  Alcotest.(check int) "one state var" 1 (List.length schema);
+  let t'' =
+    match Designer_state.remove_state_var t' ~index:0 with
+    | Ok s -> s
+    | Error e -> Alcotest.failf "remove_state_var: %s" e
+  in
+  let schema2 = Designer_state.get_state_schema t'' in
+  Alcotest.(check int) "zero state vars" 0 (List.length schema2)
+
 (* ---- Runner ---- *)
 
 let () =
@@ -255,5 +402,18 @@ let () =
             test_form_empty_required_field_rejected;
           Alcotest.test_case "duplicate id rejected" `Quick
             test_form_duplicate_id_rejected;
+        ] );
+      ( "US5: page state",
+        [
+          Alcotest.test_case "schema parsed" `Quick test_state_schema_parsed;
+          Alcotest.test_case "set_state action" `Quick test_set_state_action;
+          Alcotest.test_case "binding sync" `Quick test_state_binding_sync;
+          Alcotest.test_case "inc_state action" `Quick test_inc_state_action;
+          Alcotest.test_case "reset_state action" `Quick
+            test_reset_state_action;
+          Alcotest.test_case "roundtrip state_schema" `Quick
+            test_state_roundtrip;
+          Alcotest.test_case "designer add/remove var" `Quick
+            test_designer_state_var_add_remove;
         ] );
     ]

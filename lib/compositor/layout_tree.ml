@@ -137,3 +137,188 @@ let add_child_at root ~path ~position child =
     | _ -> false
   in
   navigate root path
+
+(** Display node for the designer's tree pane. *)
+type display_node = {
+  depth : int;
+  label : string;
+  id : string;  (** widget id for leaves; "~kind~path" key for containers *)
+  is_container : bool;
+  path : int list;
+}
+
+(** Collect nodes for the tree pane.  The root Flex is the implicit page
+    container and is skipped — only its children are listed. *)
+let collect_display_nodes root =
+  let path_to_key path =
+    String.concat "." (List.map string_of_int path)
+  in
+  let rec aux node path depth =
+    match node with
+    | Leaf { id; _ } ->
+        [ { depth; label = id; id; is_container = false; path } ]
+    | Flex { direction; children; _ } ->
+        let lbl =
+          match direction with Row -> "→ flex-row" | Column -> "↓ flex-col"
+        in
+        let key = "~flex~" ^ path_to_key path in
+        let self = { depth; label = lbl; id = key; is_container = true; path } in
+        let child_nodes =
+          List.concat
+            (List.mapi (fun i c -> aux c (path @ [ i ]) (depth + 1)) children)
+        in
+        self :: child_nodes
+    | Grid { children; _ } ->
+        let key = "~grid~" ^ path_to_key path in
+        let self =
+          { depth; label = "⊞ grid"; id = key; is_container = true; path }
+        in
+        let child_nodes =
+          List.concat
+            (List.mapi
+               (fun i (_, c) -> aux c (path @ [ i ]) (depth + 1))
+               children)
+        in
+        self :: child_nodes
+    | Boxed { title; child; _ } ->
+        let lbl =
+          match title with Some t -> "□ " ^ t | None -> "□ box"
+        in
+        let key = "~box~" ^ path_to_key path in
+        let self =
+          { depth; label = lbl; id = key; is_container = true; path }
+        in
+        let child_nodes =
+          match child with
+          | Some c -> aux c (path @ [ 0 ]) (depth + 1)
+          | None -> []
+        in
+        self :: child_nodes
+    | Card { title; child; _ } ->
+        let lbl =
+          match title with Some t -> "▣ " ^ t | None -> "▣ card"
+        in
+        let key = "~card~" ^ path_to_key path in
+        let self =
+          { depth; label = lbl; id = key; is_container = true; path }
+        in
+        let child_nodes =
+          match child with
+          | Some c -> aux c (path @ [ 0 ]) (depth + 1)
+          | None -> []
+        in
+        self :: child_nodes
+  in
+  (* Skip the root container — it is the implicit page Flex *)
+  match root with
+  | Flex { children; _ } ->
+      List.concat (List.mapi (fun i c -> aux c [ i ] 0) children)
+  | _ -> aux root [] 0
+
+(** Decode a container ID of the form "~kind~i.j..." back to a layout path.
+    Returns [None] if the string is not a valid container ID. *)
+let path_of_container_id id =
+  match String.split_on_char '~' id with
+  | [ ""; _kind; "" ] -> Some []
+  | [ ""; _kind; path_str ] ->
+      let parts = String.split_on_char '.' path_str in
+      let indices = List.filter_map int_of_string_opt parts in
+      if List.length indices = List.length parts then Some indices else None
+  | _ -> None
+
+let is_container_id id = String.length id > 0 && id.[0] = '~'
+
+(** Count direct children of the container node reached by following [path]. *)
+let count_children_at layout path =
+  let rec nav node p =
+    match (node, p) with
+    | Flex f, [] -> List.length f.children
+    | Grid g, [] -> List.length g.children
+    | (Boxed _ | Card _), [] -> 0
+    | Flex f, i :: rest -> (
+        match List.nth_opt f.children i with
+        | Some c -> nav c rest
+        | None -> 0)
+    | Grid g, i :: rest -> (
+        match List.nth_opt g.children i with
+        | Some (_, c) -> nav c rest
+        | None -> 0)
+    | Boxed { child = Some c; _ }, 0 :: rest -> nav c rest
+    | Card { child = Some c; _ }, 0 :: rest -> nav c rest
+    | _ -> 0
+  in
+  nav layout path
+
+(** Return the (parent_path, position_in_parent) of the leaf with [widget_id].
+    Returns [None] if the widget is not found. *)
+let find_widget_parent_info layout widget_id =
+  let rec aux node path =
+    match node with
+    | Leaf _ -> None
+    | Flex f ->
+        let direct =
+          List.find_mapi
+            (fun i child ->
+              match child with
+              | Leaf { id; _ } when id = widget_id -> Some (path, i)
+              | _ -> None)
+            f.children
+        in
+        if direct <> None then direct
+        else
+          List.find_map
+            (fun (i, child) -> aux child (path @ [ i ]))
+            (List.mapi (fun i c -> (i, c)) f.children)
+    | Grid g ->
+        let direct =
+          List.find_mapi
+            (fun i (_, child) ->
+              match child with
+              | Leaf { id; _ } when id = widget_id -> Some (path, i)
+              | _ -> None)
+            g.children
+        in
+        if direct <> None then direct
+        else
+          List.find_map
+            (fun (i, (_, child)) -> aux child (path @ [ i ]))
+            (List.mapi (fun i c -> (i, c)) g.children)
+    | Boxed { child = Some c; _ } -> (
+        match c with
+        | Leaf { id; _ } when id = widget_id -> Some (path, 0)
+        | _ -> aux c (path @ [ 0 ]))
+    | Card { child = Some c; _ } -> (
+        match c with
+        | Leaf { id; _ } when id = widget_id -> Some (path, 0)
+        | _ -> aux c (path @ [ 0 ]))
+    | _ -> None
+  in
+  aux layout []
+
+(** Human-readable label for the node at [path]. *)
+let node_label_at layout path =
+  let rec nav node p =
+    match (node, p) with
+    | _, [] -> (
+        match node with
+        | Flex { direction; _ } -> (
+            match direction with Row -> "→ flex-row" | Column -> "↓ flex-col")
+        | Grid _ -> "⊞ grid"
+        | Boxed { title; _ } -> (
+            match title with Some t -> "□ " ^ t | None -> "□ box")
+        | Card { title; _ } -> (
+            match title with Some t -> "▣ " ^ t | None -> "▣ card")
+        | Leaf { id; _ } -> id)
+    | Flex f, i :: rest -> (
+        match List.nth_opt f.children i with
+        | Some c -> nav c rest
+        | None -> "?")
+    | Grid g, i :: rest -> (
+        match List.nth_opt g.children i with
+        | Some (_, c) -> nav c rest
+        | None -> "?")
+    | Boxed { child = Some c; _ }, 0 :: rest -> nav c rest
+    | Card { child = Some c; _ }, 0 :: rest -> nav c rest
+    | _ -> "?"
+  in
+  nav layout path

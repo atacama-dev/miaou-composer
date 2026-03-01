@@ -17,3 +17,7 @@ type t =
   | Set_disabled of { target : string; value : bool }
   | Set_visible of { target : string; value : bool }
   | Set_items of { target : string; items : string list }
+  | Set_state of { key : string; value : Yojson.Safe.t }
+  | Copy_widget_to_state of { key : string; source : string }
+  | Inc_state of { key : string; by : float }
+  | Reset_state of { key : string }

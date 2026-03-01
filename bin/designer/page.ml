@@ -37,9 +37,16 @@ let render_status_bar (t : Designer_state.t) cols =
     match Preview.get_focused_widget t with Some id -> id | None -> "-"
   in
   let insert_lbl = Designer_state.insert_path_label t in
+  let pane_str =
+    match t.active_pane with
+    | Designer_state.PalettePane -> "Palette"
+    | Designer_state.TreePane -> "Tree"
+    | Designer_state.PropertiesPane -> "Properties"
+    | Designer_state.StatePane -> "State"
+  in
   let bar =
-    Printf.sprintf " [%s] %s | %d widgets | %d wirings | focus: %s | in: %s"
-      mode_str t.page_id widget_count wiring_count focused insert_lbl
+    Printf.sprintf " [%s] %s | %d widgets | %d wirings | pane: %s | focus: %s | in: %s"
+      mode_str t.page_id widget_count wiring_count pane_str focused insert_lbl
   in
   let padded =
     let len = String.length bar in
@@ -68,6 +75,29 @@ let finish_wiring (t : Designer_state.t) ~source ~event ~action_type ~form =
     | "navigate" -> Some (Action.Navigate { target = value })
     | "back" -> Some Action.Back
     | "quit" -> Some Action.Quit
+    | "set_state" ->
+        let key = Form.get_field form "key" in
+        let value_str = Form.get_field form "value" in
+        let json_val =
+          (try Yojson.Safe.from_string value_str
+           with _ -> if value_str = "" then `Null else `String value_str)
+        in
+        if key = "" then None
+        else Some (Action.Set_state { key; value = json_val })
+    | "copy_widget_to_state" ->
+        let key = Form.get_field form "key" in
+        let source_id = Form.get_field form "source" in
+        if key = "" then None
+        else Some (Action.Copy_widget_to_state { key; source = source_id })
+    | "inc_state" ->
+        let key = Form.get_field form "key" in
+        let by_str = Form.get_field form "by" in
+        let by = try float_of_string by_str with _ -> 1.0 in
+        if key = "" then None
+        else Some (Action.Inc_state { key; by })
+    | "reset_state" ->
+        let key = Form.get_field form "key" in
+        if key = "" then None else Some (Action.Reset_state { key })
     | _ -> None
   in
   match action_opt with
@@ -322,39 +352,105 @@ let render_left_pane (t : Designer_state.t) ~size =
 let render_canvas (t : Designer_state.t) ~size =
   Preview.render_preview t ~cols:size.LTerm_geom.cols ~rows:size.LTerm_geom.rows
 
+let render_state_pane (t : Designer_state.t) ~width =
+  let schema = Designer_state.get_state_schema t in
+  let bindings = Designer_state.get_state_bindings t in
+  let header =
+    Printf.sprintf "State Variables (%d)\n" (List.length schema)
+    ^ String.make width '-'
+    ^ "\n"
+  in
+  let var_lines =
+    List.mapi
+      (fun i (sv : Miaou_composer_lib.Page.state_var) ->
+        let cursor_mark = if i = t.state_cursor then ">" else " " in
+        let scope_str =
+          match sv.scope with
+          | Miaou_composer_lib.Page.Ephemeral -> "eph"
+          | Miaou_composer_lib.Page.Persistent -> "per"
+        in
+        let typ_str =
+          match sv.typ with
+          | `String -> "str"
+          | `Bool -> "bool"
+          | `Int -> "int"
+          | `Float -> "flt"
+          | `Json -> "json"
+        in
+        let default_str = Yojson.Safe.to_string sv.default in
+        Printf.sprintf "%s %-14s %-4s %s %s" cursor_mark sv.key typ_str
+          scope_str default_str)
+      schema
+  in
+  let vars_section =
+    if schema = [] then "  (no state vars)\n"
+    else String.concat "\n" var_lines ^ "\n"
+  in
+  let bindings_section =
+    if bindings = [] then ""
+    else
+      let hdr = "\n  Bindings:\n" in
+      let rows =
+        List.map
+          (fun (b : Miaou_composer_lib.Page.state_binding) ->
+            Printf.sprintf "  %s -> %s.%s" b.key b.widget_id b.prop)
+          bindings
+      in
+      hdr ^ String.concat "\n" rows ^ "\n"
+  in
+  let form_section =
+    match t.state_form with
+    | Some form ->
+        "\n" ^ String.make width '-' ^ "\n" ^ Form.render form ~width
+    | None -> "\n  [a] Add  [d] Del  [Enter] Edit\n"
+  in
+  header ^ vars_section ^ bindings_section ^ form_section
+
+let render_info_panel (t : Designer_state.t) ~width =
+  let widget_count = List.length (Designer_state.get_widget_ids t) in
+  let wiring_count = Designer_state.get_wiring_count t in
+  let insert_lbl = Designer_state.insert_path_label t in
+  let info =
+    Printf.sprintf
+      "  Page: %s\n  Insert into: %s\n\n  Widgets: %d  Wirings: %d\n\n\
+       \  Keys:\n\
+       \  [Enter]  Add / select\n\
+       \  [Esc]    Reset insert target\n\
+       \  [p]  Preview\n\
+       \  [i]  Import\n\
+       \  [e]  Export\n\
+       \  [w]  Wire\n\
+       \  [s]  State vars\n\
+       \  [q]  Quit\n\
+       \  [Tab]  Next pane\n\
+       \  [Del]  Remove widget"
+      t.page_id insert_lbl widget_count wiring_count
+  in
+  ignore width;
+  info
+
 let render_right_pane (t : Designer_state.t) ~size =
   let width = size.LTerm_geom.cols in
-  match t.properties_form with
-  | Some form ->
-      let focused = t.active_pane = Designer_state.PropertiesPane in
-      let focus_indicator = if focused then "► " else "  " in
-      let title_line =
-        focus_indicator ^ "Properties\n" ^ String.make width '-' ^ "\n"
-      in
-      title_line ^ Form.render form ~width
-  | None ->
-      let widget_count = List.length (Designer_state.get_widget_ids t) in
-      let wiring_count = Designer_state.get_wiring_count t in
-      let insert_lbl = Designer_state.insert_path_label t in
-      let info =
-        Printf.sprintf
-          "  Page: %s\n  Insert into: %s\n\n  Widgets: %d  Wirings: %d\n\n\
-           \  Keys:\n\
-           \  [Enter]  Add / select\n\
-           \  [Esc]    Reset insert target\n\
-           \  [p]  Preview\n\
-           \  [i]  Import\n\
-           \  [e]  Export\n\
-           \  [w]  Wire\n\
-           \  [q]  Quit\n\
-           \  [Tab]  Next pane\n\
-           \  [Del]  Remove widget"
-          t.page_id insert_lbl widget_count wiring_count
-      in
-      ignore width;
-      info
+  if t.active_pane = Designer_state.StatePane then
+    render_state_pane t ~width
+  else
+    match t.properties_form with
+    | Some form ->
+        let title_line = "Properties\n" ^ String.make width '-' ^ "\n" in
+        title_line ^ Form.render form ~width
+    | None -> render_info_panel t ~width
 
 (* ---- Three-pane view ---- *)
+
+(* Prepend \027[0m to every line so each column resets any lingering ANSI state
+   from the previous column before rendering its own content. This prevents
+   selection highlights from bleeding across column boundaries. *)
+let with_column_reset render_fn ~size =
+  let raw = render_fn ~size in
+  raw
+  |> String.split_on_char '\n'
+  |> List.map (fun line -> "\027[0m" ^ line)
+  |> String.concat "\n"
 
 let view pstate ~focus:_ ~size =
   let t = pstate.Navigation.s in
@@ -368,12 +464,12 @@ let view pstate ~focus:_ ~size =
           cross = None;
         };
         {
-          Flex.render = (fun ~size -> render_canvas t ~size);
+          Flex.render = with_column_reset (fun ~size -> render_canvas t ~size);
           basis = Flex.Fill;
           cross = None;
         };
         {
-          Flex.render = (fun ~size -> render_right_pane t ~size);
+          Flex.render = with_column_reset (fun ~size -> render_right_pane t ~size);
           basis = Flex.Px right_w;
           cross = None;
         };
@@ -461,6 +557,104 @@ let handle_tree_key (t : Designer_state.t) (key : Keys.t) =
             | Ok t' -> t'))
   | _ -> t
 
+let handle_state_key (t : Designer_state.t) (key : Keys.t) =
+  match t.state_form with
+  | Some form -> (
+      (* Form is open: route keys to it *)
+      match key with
+      | Keys.Escape ->
+          {
+            t with
+            state_form = None;
+            state_editing_idx = None;
+          }
+      | Keys.Tab ->
+          { t with state_form = Some (Form.move_focus form 1) }
+      | Keys.ShiftTab ->
+          { t with state_form = Some (Form.move_focus form (-1)) }
+      | Keys.Enter -> (
+          match Form.form_to_state_var form with
+          | None -> t
+          | Some sv ->
+              let t' =
+                match t.state_editing_idx with
+                | Some idx ->
+                    (* Replace existing var *)
+                    let cpage = Designer_state.get_page t in
+                    let schema = cpage.Miaou_composer_lib.Page.state_schema in
+                    let new_schema =
+                      List.mapi (fun i v -> if i = idx then sv else v) schema
+                    in
+                    cpage.Miaou_composer_lib.Page.state_schema <- new_schema;
+                    t
+                | None -> Designer_state.add_state_var t sv
+              in
+              { t' with state_form = None; state_editing_idx = None })
+      | Keys.Backspace ->
+          { t with state_form = Some (Form.update_focused_field form "Backspace") }
+      | Keys.Char c ->
+          { t with state_form = Some (Form.update_focused_field form c) }
+      | _ -> t)
+  | None -> (
+      let schema = Designer_state.get_state_schema t in
+      let n = List.length schema in
+      match key with
+      | Keys.Up ->
+          let c = if t.state_cursor > 0 then t.state_cursor - 1 else 0 in
+          { t with state_cursor = c }
+      | Keys.Down ->
+          let c =
+            if t.state_cursor < n - 1 then t.state_cursor + 1
+            else t.state_cursor
+          in
+          { t with state_cursor = c }
+      | Keys.Char "a" ->
+          let form = Form.make_state_var_form () in
+          { t with state_form = Some form; state_editing_idx = None }
+      | Keys.Char "d" | Keys.Delete -> (
+          if n = 0 then t
+          else
+            match
+              Designer_state.remove_state_var t ~index:t.state_cursor
+            with
+            | Ok t' -> t'
+            | Error msg -> Designer_state.open_error_modal t msg)
+      | Keys.Enter ->
+          if n = 0 then t
+          else
+            let sv = List.nth schema t.state_cursor in
+            let typ_str =
+              match sv.Miaou_composer_lib.Page.typ with
+              | `String -> "string"
+              | `Bool -> "bool"
+              | `Int -> "int"
+              | `Float -> "float"
+              | `Json -> "json"
+            in
+            let scope_str =
+              match sv.Miaou_composer_lib.Page.scope with
+              | Miaou_composer_lib.Page.Ephemeral -> "ephemeral"
+              | Miaou_composer_lib.Page.Persistent -> "persistent"
+            in
+            let default_str =
+              Yojson.Safe.to_string sv.Miaou_composer_lib.Page.default
+            in
+            let form =
+              Form.make_state_var_form ~key:sv.Miaou_composer_lib.Page.key
+                ~typ:typ_str ~default:default_str ~scope:scope_str ()
+            in
+            {
+              t with
+              state_form = Some form;
+              state_editing_idx = Some t.state_cursor;
+            }
+      | Keys.Escape ->
+          {
+            t with
+            active_pane = Designer_state.PalettePane;
+          }
+      | _ -> t)
+
 let handle_properties_key (t : Designer_state.t) (key : Keys.t) =
   match t.properties_form with
   | None -> t
@@ -547,6 +741,9 @@ let on_key pstate key ~size:_ =
                 if t.Designer_state.active_pane = Designer_state.PropertiesPane
                    && t.Designer_state.properties_form <> None
                 then handle_properties_key t key
+                else if t.Designer_state.active_pane = Designer_state.StatePane
+                        && t.Designer_state.state_form <> None
+                then handle_state_key t key
                 else
                   match key with
                   | Keys.Tab -> Designer_state.cycle_pane t
@@ -558,13 +755,17 @@ let on_key pstate key ~size:_ =
                       handle_menu_action t Menu.Import
                   | Keys.Char "w" ->
                       handle_menu_action t Menu.AddWiringStep1
+                  | Keys.Char "s"
+                    when t.active_pane <> Designer_state.StatePane ->
+                      { t with active_pane = Designer_state.StatePane }
                   | Keys.Char "q" -> t (* handled below *)
                   | _ ->
                       (* Delegate to active pane *)
                       (match t.active_pane with
                        | Designer_state.PalettePane -> handle_palette_key t key
                        | Designer_state.TreePane -> handle_tree_key t key
-                       | Designer_state.PropertiesPane -> handle_properties_key t key)
+                       | Designer_state.PropertiesPane -> handle_properties_key t key
+                       | Designer_state.StatePane -> handle_state_key t key)
               in
               let is_quit = key = Keys.Char "q" && t' == t in
               if is_quit then (Navigation.quit pstate, Key_event.Handled)

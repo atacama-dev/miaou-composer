@@ -274,7 +274,7 @@ let handle_tool (session : Session.t) ~tool_name
                          (List.map
                             (fun (e : Page.emit_event) ->
                               `Assoc
-                                [ ("name", `String e.name); ("state", e.state) ])
+                                [ ("name", `String e.name); ("state", e.snapshot) ])
                             events) );
                    ])))
   | "render" -> (
@@ -306,7 +306,7 @@ let handle_tool (session : Session.t) ~tool_name
                                   `Assoc
                                     [
                                       ("name", `String e.name);
-                                      ("state", e.state);
+                                      ("state", e.snapshot);
                                     ])
                                 events) );
                        ]))))

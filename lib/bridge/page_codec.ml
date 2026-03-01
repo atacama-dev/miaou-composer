@@ -18,6 +18,73 @@ let get_string fields key =
 let get_int fields key ~default =
   match List.assoc_opt key fields with Some (`Int n) -> n | _ -> default
 
+let parse_state_scope s =
+  match s with "persistent" -> Page.Persistent | _ -> Page.Ephemeral
+
+let parse_state_typ s =
+  match s with
+  | "bool" -> `Bool
+  | "int" -> `Int
+  | "float" -> `Float
+  | "json" -> `Json
+  | _ -> `String
+
+let parse_state_var (j : Yojson.Safe.t) : Page.state_var option =
+  match j with
+  | `Assoc fields ->
+      let key = get_string fields "key" in
+      if key = "" then None
+      else
+        let typ = parse_state_typ (get_string fields "type") in
+        let default =
+          match List.assoc_opt "default" fields with
+          | Some v -> v
+          | None -> `Null
+        in
+        let scope = parse_state_scope (get_string fields "scope") in
+        Some { Page.key; typ; default; scope }
+  | _ -> None
+
+let parse_state_binding (j : Yojson.Safe.t) : Page.state_binding option =
+  match j with
+  | `Assoc fields ->
+      let key = get_string fields "key" in
+      let widget_id = get_string fields "widget_id" in
+      let prop = get_string fields "prop" in
+      if key = "" || widget_id = "" || prop = "" then None
+      else Some { Page.key; widget_id; prop }
+  | _ -> None
+
+let state_var_to_json (sv : Page.state_var) : Yojson.Safe.t =
+  let scope_str =
+    match sv.scope with
+    | Page.Ephemeral -> "ephemeral"
+    | Page.Persistent -> "persistent"
+  in
+  let typ_str =
+    match sv.typ with
+    | `String -> "string"
+    | `Bool -> "bool"
+    | `Int -> "int"
+    | `Float -> "float"
+    | `Json -> "json"
+  in
+  `Assoc
+    [
+      ("key", `String sv.key);
+      ("type", `String typ_str);
+      ("default", sv.default);
+      ("scope", `String scope_str);
+    ]
+
+let state_binding_to_json (sb : Page.state_binding) : Yojson.Safe.t =
+  `Assoc
+    [
+      ("key", `String sb.key);
+      ("widget_id", `String sb.widget_id);
+      ("prop", `String sb.prop);
+    ]
+
 (** Decode a complete page definition from JSON. Returns a Page.t with all
     widgets instantiated and wirings connected. *)
 let page_of_json (json : Yojson.Safe.t) : (Page.t, string) result =
@@ -103,6 +170,20 @@ let page_of_json (json : Yojson.Safe.t) : (Page.t, string) result =
                         page.focus_ring <-
                           Miaou_internals.Focus_ring.create ring_ids
                   | _ -> ());
+                  (* Parse state schema *)
+                  (match List.assoc_opt "state_schema" fields with
+                  | Some (`List items) ->
+                      page.Page.state_schema <-
+                        List.filter_map parse_state_var items
+                  | _ -> ());
+                  (* Parse state bindings *)
+                  (match List.assoc_opt "state_bindings" fields with
+                  | Some (`List items) ->
+                      page.Page.state_bindings <-
+                        List.filter_map parse_state_binding items
+                  | _ -> ());
+                  (* Initialize runtime state from schema *)
+                  Page.init_state page;
                   Ok page
                 end))
   | _ -> Error "Page definition must be a JSON object"
@@ -146,6 +227,12 @@ let page_to_json (page : Page.t) : Yojson.Safe.t =
         | None -> false)
       all_ids
   in
+  let state_schema_json =
+    `List (List.map state_var_to_json page.Page.state_schema)
+  in
+  let state_bindings_json =
+    `List (List.map state_binding_to_json page.Page.state_bindings)
+  in
   `Assoc
     [
       ("id", `String page.id);
@@ -155,4 +242,6 @@ let page_to_json (page : Page.t) : Yojson.Safe.t =
       ( "size",
         `Assoc [ ("rows", `Int page.size.rows); ("cols", `Int page.size.cols) ]
       );
+      ("state_schema", state_schema_json);
+      ("state_bindings", state_bindings_json);
     ]

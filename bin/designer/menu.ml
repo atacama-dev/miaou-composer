@@ -151,6 +151,10 @@ let wiring_step3_level source event =
       "navigate";
       "back";
       "quit";
+      "set_state";
+      "copy_widget_to_state";
+      "inc_state";
+      "reset_state";
     ]
   in
   let items =

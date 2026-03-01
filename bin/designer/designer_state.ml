@@ -7,8 +7,6 @@
 
 [@@@warning "-32-34-37-69"]
 
-(* Use module aliases rather than `open` to avoid dune mistaking compositor's
-   Page/Session/etc. for this library's own Page module. *)
 module Clib = Miaou_composer_lib
 module Cbridge = Miaou_composer_bridge
 module Cpage = Miaou_composer_lib.Page
@@ -24,7 +22,7 @@ module LW = Miaou_widgets_display.List_widget
 
 type mode = Design | Preview
 
-type pane = PalettePane | TreePane | PropertiesPane
+type pane = PalettePane | TreePane | PropertiesPane | StatePane
 
 type modal_kind =
   | File_path of { label : string; on_confirm : string -> t -> t }
@@ -43,12 +41,17 @@ and t = {
   menu : Menu.t;
   form : Form.t option;
   modal : modal_state option;
-  (* new three-pane fields *)
   palette : LW.t;
   layout_tree : LW.t;
   properties_form : Form.t option;
   active_pane : pane;
   widget_params : (string, Yojson.Safe.t) Hashtbl.t;
+  (* Current insert target: path into the layout tree where new items go *)
+  insert_path : int list;
+  (* State pane UI *)
+  state_cursor : int;
+  state_form : Form.t option;
+  state_editing_idx : int option;
 }
 
 let make_root_layout () =
@@ -68,24 +71,40 @@ let make_palette_items () =
     [ "button"; "checkbox"; "textbox"; "textarea"; "select"; "radio"; "switch" ]
   in
   let display_types = [ "pager"; "list"; "description_list" ] in
-  let make_item wtype =
-    let exists = List.exists (fun e -> e.Miaou_composer_lib.Catalog.name = wtype) catalog in
+  let layout_types = [ "flex-row"; "flex-col"; "box"; "card" ] in
+  let make_widget_item wtype =
+    let exists =
+      List.exists (fun e -> e.Miaou_composer_lib.Catalog.name = wtype) catalog
+    in
     if exists then Some (LW.item ~id:wtype ~selectable:true wtype) else None
   in
-  let input_items = List.filter_map make_item input_types in
-  let display_items = List.filter_map make_item display_types in
+  let input_items = List.filter_map make_widget_item input_types in
+  let display_items = List.filter_map make_widget_item display_types in
+  let layout_items =
+    List.map (fun lt -> LW.item ~id:lt ~selectable:true lt) layout_types
+  in
   [
     LW.group ~selectable:false "Input" input_items;
     LW.group ~selectable:false "Display" display_items;
+    LW.group ~selectable:false "Layout" layout_items;
   ]
 
 let refresh_layout_tree t =
-  let cpage = match Csession.get_page t.session ~page_id:t.page_id with
+  let cpage =
+    match Csession.get_page t.session ~page_id:t.page_id with
     | Some p -> p
     | None -> failwith "refresh_layout_tree: page not found"
   in
-  let ids = Clayout.collect_ids cpage.Cpage.layout in
-  let items = List.map (fun id -> LW.item ~id ~selectable:true id) ids in
+  let nodes = Clayout.collect_display_nodes cpage.Cpage.layout in
+  let items =
+    List.map
+      (fun (n : Clayout.display_node) ->
+        let indent = String.make (n.depth * 2) ' ' in
+        let icon = if n.is_container then "" else "  " in
+        let label = indent ^ icon ^ n.label in
+        LW.item ~id:n.id ~selectable:true label)
+      nodes
+  in
   let old_cursor = LW.cursor_index t.layout_tree in
   let new_lw = LW.set_items t.layout_tree items in
   let n = LW.visible_count new_lw in
@@ -99,10 +118,10 @@ let refresh_properties_form t =
       let widget_type =
         match Csession.get_page t.session ~page_id:t.page_id with
         | None -> ""
-        | Some cpage ->
-            (match Hashtbl.find_opt cpage.Cpage.widgets id with
-             | Some wb -> Cwbox.type_name wb
-             | None -> "")
+        | Some cpage -> (
+            match Hashtbl.find_opt cpage.Cpage.widgets id with
+            | Some wb -> Cwbox.type_name wb
+            | None -> "")
       in
       if widget_type = "" then { t with properties_form = None }
       else
@@ -118,6 +137,23 @@ let select_widget t ~id =
   let t' = { t with focused_widget = Some id; active_pane = PropertiesPane } in
   refresh_properties_form t'
 
+let select_container t ~container_id =
+  match Clayout.path_of_container_id container_id with
+  | None -> t
+  | Some path ->
+      { t with insert_path = path; active_pane = PalettePane }
+
+let insert_path_label t =
+  match t.insert_path with
+  | [] -> "root"
+  | path ->
+      let cpage =
+        match Csession.get_page t.session ~page_id:t.page_id with
+        | Some p -> p
+        | None -> failwith "insert_path_label: page not found"
+      in
+      Clayout.node_label_at cpage.Cpage.layout path
+
 let create () =
   let session = Csession.create () in
   let page_id = "page_1" in
@@ -126,7 +162,12 @@ let create () =
     Cpage.create ~id:page_id ~layout ~size:{ LTerm_geom.rows = 20; cols = 50 }
   in
   ignore (Csession.add_page session cpage);
-  let palette = LW.create ~expand_all:true (make_palette_items ()) in
+  (* Start palette cursor on first selectable item (skip group header) *)
+  let palette =
+    LW.handle_key
+      (LW.create ~expand_all:true (make_palette_items ()))
+      ~key:"Down"
+  in
   {
     mode = Design;
     session;
@@ -142,6 +183,10 @@ let create () =
     properties_form = None;
     active_pane = PalettePane;
     widget_params = Hashtbl.create 16;
+    insert_path = [];
+    state_cursor = 0;
+    state_form = None;
+    state_editing_idx = None;
   }
 
 let get_page t =
@@ -193,11 +238,14 @@ let add_widget t ~widget_type ~params_json =
   in
   match Cfactory.create_widget full_json with
   | Error msg -> Error msg
-  | Ok (widget_id, widget_box) -> (
-      let position = List.length (Clayout.collect_ids cpage.Cpage.layout) in
-      match
-        Cpage.add_widget cpage ~id:widget_id ~widget_box ~path:[] ~position
-      with
+  | Ok (widget_id, widget_box) ->
+      let position =
+        Clayout.count_children_at cpage.Cpage.layout t.insert_path
+      in
+      (match
+         Cpage.add_widget cpage ~id:widget_id ~widget_box ~path:t.insert_path
+           ~position
+       with
       | Error msg -> Error msg
       | Ok () ->
           let new_counter = t.widget_counter + 1 in
@@ -222,12 +270,10 @@ let default_params_for widget_type =
 
 let add_widget_with_defaults t ~widget_type =
   let params_json = default_params_for widget_type in
-  (* Determine id before adding *)
   let id =
     let counter = t.widget_counter + 1 in
     Printf.sprintf "%s_%d" widget_type counter
   in
-  (* Merge id into params *)
   let params_with_id =
     match params_json with
     | `Assoc fields -> `Assoc (("id", `String id) :: fields)
@@ -236,10 +282,53 @@ let add_widget_with_defaults t ~widget_type =
   match add_widget t ~widget_type ~params_json:params_with_id with
   | Error msg -> Error msg
   | Ok t' ->
-      (* Store params (without id field, to keep it clean) *)
       Hashtbl.replace t'.widget_params id params_json;
       let t'' = refresh_layout_tree t' in
-      Ok (select_widget t'' ~id)
+      (* Stay in PalettePane so the user can keep adding widgets *)
+      Ok t''
+
+let add_container t ~container_type =
+  let cpage = get_page t in
+  let counter = t.widget_counter + 1 in
+  let no_pad = Clayout.{ left = 0; right = 0; top = 0; bottom = 0 } in
+  let node =
+    match container_type with
+    | "flex-row" ->
+        Clayout.Flex
+          {
+            direction = Clayout.Row;
+            gap = 1;
+            padding = no_pad;
+            justify = Clayout.Start;
+            align_items = Clayout.Stretch;
+            children = [];
+          }
+    | "flex-col" ->
+        Clayout.Flex
+          {
+            direction = Clayout.Column;
+            gap = 1;
+            padding = no_pad;
+            justify = Clayout.Start;
+            align_items = Clayout.Stretch;
+            children = [];
+          }
+    | "box" ->
+        Clayout.Boxed
+          { title = None; style = Clayout.Single; padding = no_pad; child = None }
+    | "card" ->
+        Clayout.Card { title = None; footer = None; accent = None; child = None }
+    | _ -> failwith ("Unknown container type: " ^ container_type)
+  in
+  let n_before =
+    Clayout.count_children_at cpage.Cpage.layout t.insert_path
+  in
+  ignore
+    (Clayout.add_child_at cpage.Cpage.layout ~path:t.insert_path
+       ~position:n_before node);
+  let new_path = t.insert_path @ [ n_before ] in
+  let t' = { t with widget_counter = counter; insert_path = new_path } in
+  Ok (refresh_layout_tree t')
 
 let apply_properties_form t form =
   match t.focused_widget with
@@ -253,43 +342,50 @@ let apply_properties_form t form =
       in
       if widget_type = "" then t
       else begin
-        (* Get original position *)
-        let ids = Clayout.collect_ids cpage.Cpage.layout in
-        let orig_pos =
-          match
-            List.fold_left
-              (fun (acc, i) wid -> if wid = id then (Some i, i + 1) else (acc, i + 1))
-              (None, 0) ids
-          with
-          | (Some pos, _) -> pos
-          | (None, _) -> List.length ids
+        (* Find the widget's original location in the layout tree *)
+        let orig_path, orig_pos =
+          match Clayout.find_widget_parent_info cpage.Cpage.layout id with
+          | Some (p, i) -> (p, i)
+          | None ->
+              (* Fallback: flat index at root *)
+              let ids = Clayout.collect_ids cpage.Cpage.layout in
+              let pos =
+                match
+                  List.fold_left
+                    (fun (acc, i) wid ->
+                      if wid = id then (Some i, i + 1) else (acc, i + 1))
+                    (None, 0) ids
+                with
+                | Some pos, _ -> pos
+                | None, _ -> List.length ids
+              in
+              ([], pos)
         in
-        (* Remove widget *)
         (match Cpage.remove_widget cpage ~id with
-         | Error _ -> ()
-         | Ok () -> ());
-        (* Build params from form *)
+        | Error _ -> ()
+        | Ok () -> ());
         let params_json = Form.to_json form in
-        (* Get new id from form *)
         let new_id = Form.get_id form in
         let actual_id = if new_id = "" then id else new_id in
         let full_json =
           match params_json with
           | `Assoc fields ->
-              let fields_no_id = List.filter (fun (k, _) -> k <> "id") fields in
+              let fields_no_id =
+                List.filter (fun (k, _) -> k <> "id") fields
+              in
               `Assoc
                 ([ ("type", `String widget_type); ("id", `String actual_id) ]
-                 @ fields_no_id)
+                @ fields_no_id)
           | _ ->
               `Assoc
                 [ ("type", `String widget_type); ("id", `String actual_id) ]
         in
         (match Cfactory.create_widget full_json with
-         | Error _ -> ()
-         | Ok (wid, wbox) ->
-             ignore
-               (Cpage.add_widget cpage ~id:wid ~widget_box:wbox ~path:[]
-                  ~position:orig_pos));
+        | Error _ -> ()
+        | Ok (wid, wbox) ->
+            ignore
+              (Cpage.add_widget cpage ~id:wid ~widget_box:wbox ~path:orig_path
+                 ~position:orig_pos));
         Hashtbl.replace t.widget_params actual_id params_json;
         let t' = { t with focused_widget = Some actual_id } in
         let t'' = refresh_layout_tree t' in
@@ -368,7 +464,7 @@ let modal_confirm t =
       let t' = close_modal t in
       on_confirm input t'
   | Some { mk = Error_msg _; _ } -> close_modal t
-  | Some { mk = File_browser _; _ } -> t (* handled externally via fb state *)
+  | Some { mk = File_browser _; _ } -> t
 
 let update_file_browser t fb =
   match t.modal with
@@ -393,16 +489,15 @@ let import_page t path =
         ignore (Csession.remove_page t.session ~page_id:t.page_id);
         let new_page_id = new_cpage.Cpage.id in
         ignore (Csession.add_page t.session new_cpage);
-        (* Rebuild widget_params from the imported page *)
         let new_params = Hashtbl.create 16 in
         List.iter
           (fun widget_id ->
             (match Hashtbl.find_opt new_cpage.Cpage.widgets widget_id with
-             | Some wb ->
-                 let wtype = Cwbox.type_name wb in
-                 let params = default_params_for wtype in
-                 Hashtbl.replace new_params widget_id params
-             | None -> ()))
+            | Some wb ->
+                let wtype = Cwbox.type_name wb in
+                let params = default_params_for wtype in
+                Hashtbl.replace new_params widget_id params
+            | None -> ()))
           (Clayout.collect_ids new_cpage.Cpage.layout);
         let t' =
           {
@@ -414,6 +509,10 @@ let import_page t path =
             properties_form = None;
             active_pane = PalettePane;
             widget_params = new_params;
+            insert_path = [];
+            state_cursor = 0;
+            state_form = None;
+            state_editing_idx = None;
           }
         in
         Ok (refresh_layout_tree t')
@@ -426,15 +525,60 @@ let cycle_pane t =
     match t.active_pane with
     | PalettePane -> TreePane
     | TreePane -> PropertiesPane
-    | PropertiesPane -> PalettePane
+    | PropertiesPane -> StatePane
+    | StatePane -> PalettePane
   in
   { t with active_pane = next }
 
 let cycle_pane_back t =
   let prev =
     match t.active_pane with
-    | PalettePane -> PropertiesPane
+    | PalettePane -> StatePane
     | TreePane -> PalettePane
     | PropertiesPane -> TreePane
+    | StatePane -> PropertiesPane
   in
   { t with active_pane = prev }
+
+(* ---- State schema / binding helpers ---- *)
+
+let get_state_schema t =
+  let cpage = get_page t in
+  cpage.Cpage.state_schema
+
+let get_state_bindings t =
+  let cpage = get_page t in
+  cpage.Cpage.state_bindings
+
+let add_state_var t (sv : Clib.Page.state_var) =
+  let cpage = get_page t in
+  cpage.Cpage.state_schema <- cpage.Cpage.state_schema @ [ sv ];
+  Clib.Page.init_state cpage;
+  t
+
+let remove_state_var t ~index =
+  let cpage = get_page t in
+  let schema = cpage.Cpage.state_schema in
+  if index < 0 || index >= List.length schema then
+    Error (Printf.sprintf "State var index %d not found" index)
+  else begin
+    cpage.Cpage.state_schema <-
+      List.filteri (fun i _ -> i <> index) schema;
+    Ok { t with state_cursor = max 0 (index - 1) }
+  end
+
+let add_state_binding t (sb : Clib.Page.state_binding) =
+  let cpage = get_page t in
+  cpage.Cpage.state_bindings <- cpage.Cpage.state_bindings @ [ sb ];
+  t
+
+let remove_state_binding t ~index =
+  let cpage = get_page t in
+  let bindings = cpage.Cpage.state_bindings in
+  if index < 0 || index >= List.length bindings then
+    Error (Printf.sprintf "State binding index %d not found" index)
+  else begin
+    cpage.Cpage.state_bindings <-
+      List.filteri (fun i _ -> i <> index) bindings;
+    Ok t
+  end
