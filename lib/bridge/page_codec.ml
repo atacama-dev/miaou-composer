@@ -27,6 +27,7 @@ let parse_state_typ s =
   | "int" -> `Int
   | "float" -> `Float
   | "json" -> `Json
+  | "string_list" -> `String_list
   | _ -> `String
 
 let parse_state_var (j : Yojson.Safe.t) : Page.state_var option =
@@ -68,6 +69,7 @@ let state_var_to_json (sv : Page.state_var) : Yojson.Safe.t =
     | `Int -> "int"
     | `Float -> "float"
     | `Json -> "json"
+    | `String_list -> "string_list"
   in
   `Assoc
     [
@@ -206,6 +208,32 @@ let page_of_json (json : Yojson.Safe.t) : (Page.t, string) result =
                       in
                       page.Page.key_handlers <- handlers
                   | _ -> ());
+                  (* Parse tools *)
+                  (match List.assoc_opt "tools" fields with
+                  | Some (`List items) ->
+                      let tools =
+                        List.filter_map
+                          (fun j ->
+                            match Tool_codec.tool_def_of_json j with
+                            | Ok t -> Some t
+                            | Error _ -> None)
+                          items
+                      in
+                      page.Page.tools <- tools
+                  | _ -> ());
+                  (* Parse init_actions *)
+                  (match List.assoc_opt "init_actions" fields with
+                  | Some (`List items) ->
+                      let actions =
+                        List.filter_map
+                          (fun j ->
+                            match Action_codec.action_of_json j with
+                            | Ok a -> Some a
+                            | Error _ -> None)
+                          items
+                      in
+                      page.Page.init_actions <- actions
+                  | _ -> ());
                   (* Initialize runtime state from schema *)
                   Page.init_state page;
                   Ok page
@@ -268,6 +296,12 @@ let page_to_json (page : Page.t) : Yojson.Safe.t =
              ])
          page.Page.key_handlers)
   in
+  let tools_json =
+    `List (List.map Tool_codec.tool_def_to_json page.Page.tools)
+  in
+  let init_actions_json =
+    `List (List.map Action_codec.action_to_json page.Page.init_actions)
+  in
   `Assoc
     [
       ("id", `String page.id);
@@ -280,4 +314,6 @@ let page_to_json (page : Page.t) : Yojson.Safe.t =
       ("state_schema", state_schema_json);
       ("state_bindings", state_bindings_json);
       ("key_handlers", key_handlers_json);
+      ("tools", tools_json);
+      ("init_actions", init_actions_json);
     ]

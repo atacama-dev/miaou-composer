@@ -200,18 +200,19 @@ let all_tools () =
     {
       name = "get_catalog";
       description =
-        "Get the widget/action/layout catalog (available types and parameters). \
-         Compositor-managed widgets include structured params/events/queryable \
-         fields plus an 'mli' field with the full OCaml interface for detailed \
-         API docs. Registry-only widgets (not composable) appear with just \
-         'name' and 'mli'.";
+        "Get the widget/action/layout catalog (available types and \
+         parameters). Compositor-managed widgets include structured \
+         params/events/queryable fields plus an 'mli' field with the full \
+         OCaml interface for detailed API docs. Registry-only widgets (not \
+         composable) appear with just 'name' and 'mli'.";
       input_schema = make_schema ~properties:[] ~required:[];
     };
     {
       name = "export_page";
       description =
-        "Export a page definition to JSON (layout + wirings + focus_ring). \
-         The returned JSON can be passed directly to create_page to recreate the page.";
+        "Export a page definition to JSON (layout + wirings + focus_ring). The \
+         returned JSON can be passed directly to create_page to recreate the \
+         page.";
       input_schema =
         make_schema
           ~properties:[ ("page_id", string_prop ~desc:"Target page ID") ]
@@ -274,6 +275,11 @@ let all_tools () =
               ( "env",
                 object_prop
                   ~desc:"Extra environment variables to pass (optional)" );
+              ( "viewer_port",
+                int_prop
+                  ~desc:
+                    "Port for a web viewer (opens a browser URL to watch the \
+                     session live)" );
             ]
           ~required:[ "binary" ];
     };
@@ -288,6 +294,30 @@ let all_tools () =
               ("key", string_prop ~desc:"Key name (e.g. 'Tab', 'Enter', 'a')");
             ]
           ~required:[ "session"; "key" ];
+    };
+    {
+      name = "headless_keys";
+      description =
+        "Send a sequence of keys to a headless session with a delay between \
+         each. Returns only the final frame. Useful for typing text or \
+         performing multi-step actions.";
+      input_schema =
+        make_schema
+          ~properties:
+            [
+              ("session", string_prop ~desc:"Session ID");
+              ( "keys",
+                array_prop
+                  ~desc:
+                    "Array of key names to send in order (e.g. ['h', 'e', \
+                     'l', 'l', 'o', 'Enter'])"
+                  ~items:(`Assoc [ ("type", `String "string") ]) );
+              ( "delay_ms",
+                int_prop
+                  ~desc:
+                    "Delay in milliseconds between each key (default 50)" );
+            ]
+          ~required:[ "session"; "keys" ];
     };
     {
       name = "headless_click";

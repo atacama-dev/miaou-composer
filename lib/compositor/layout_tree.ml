@@ -142,7 +142,6 @@ let add_child_at root ~path ~position child =
   in
   navigate root path
 
-(** Display node for the designer's tree pane. *)
 type display_node = {
   depth : int;
   label : string;
@@ -150,13 +149,12 @@ type display_node = {
   is_container : bool;
   path : int list;
 }
+(** Display node for the designer's tree pane. *)
 
-(** Collect nodes for the tree pane.  The root Flex is the implicit page
+(** Collect nodes for the tree pane. The root Flex is the implicit page
     container and is skipped — only its children are listed. *)
 let collect_display_nodes root =
-  let path_to_key path =
-    String.concat "." (List.map string_of_int path)
-  in
+  let path_to_key path = String.concat "." (List.map string_of_int path) in
   let rec aux node path depth =
     match node with
     | Leaf { id; _ } ->
@@ -166,7 +164,9 @@ let collect_display_nodes root =
           match direction with Row -> "→ flex-row" | Column -> "↓ flex-col"
         in
         let key = "~flex~" ^ path_to_key path in
-        let self = { depth; label = lbl; id = key; is_container = true; path } in
+        let self =
+          { depth; label = lbl; id = key; is_container = true; path }
+        in
         let child_nodes =
           List.concat
             (List.mapi (fun i c -> aux c (path @ [ i ]) (depth + 1)) children)
@@ -185,9 +185,7 @@ let collect_display_nodes root =
         in
         self :: child_nodes
     | Boxed { title; child; _ } ->
-        let lbl =
-          match title with Some t -> "□ " ^ t | None -> "□ box"
-        in
+        let lbl = match title with Some t -> "□ " ^ t | None -> "□ box" in
         let key = "~box~" ^ path_to_key path in
         let self =
           { depth; label = lbl; id = key; is_container = true; path }
@@ -199,9 +197,7 @@ let collect_display_nodes root =
         in
         self :: child_nodes
     | Card { title; child; _ } ->
-        let lbl =
-          match title with Some t -> "▣ " ^ t | None -> "▣ card"
-        in
+        let lbl = match title with Some t -> "▣ " ^ t | None -> "▣ card" in
         let key = "~card~" ^ path_to_key path in
         let self =
           { depth; label = lbl; id = key; is_container = true; path }
@@ -240,9 +236,7 @@ let count_children_at layout path =
     | Grid g, [] -> List.length g.children
     | (Boxed _ | Card _), [] -> 0
     | Flex f, i :: rest -> (
-        match List.nth_opt f.children i with
-        | Some c -> nav c rest
-        | None -> 0)
+        match List.nth_opt f.children i with Some c -> nav c rest | None -> 0)
     | Grid g, i :: rest -> (
         match List.nth_opt g.children i with
         | Some (_, c) -> nav c rest

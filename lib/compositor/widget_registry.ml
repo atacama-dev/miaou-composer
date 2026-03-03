@@ -92,11 +92,16 @@ let box_checkbox ?(label = "") ?(checked = false) ?(disabled = false) () =
 
 let box_textbox ?(title = "") ?(width = 30) ?(initial = "") ?placeholder
     ?(mask = false) () =
-  let w =
-    Textbox_widget.create ~title ~width ~initial
-      ~placeholder:(Some (Option.value placeholder ~default:""))
-      ~mask ()
+  let mk_widget title_opt text =
+    let ph = Some (Option.value placeholder ~default:"") in
+    match title_opt with
+    | None ->
+        Textbox_widget.create ~width ~initial:text ~placeholder:ph ~mask ()
+    | Some t ->
+        Textbox_widget.create ~title:t ~width ~initial:text ~placeholder:ph
+          ~mask ()
   in
+  let w = mk_widget (if title = "" then None else Some title) initial in
   Box
     {
       type_name = "textbox";
@@ -116,13 +121,26 @@ let box_textbox ?(title = "") ?(width = 30) ?(initial = "") ?placeholder
       update =
         (fun w patch ->
           match patch with
-          | `Assoc fields ->
+          | `Assoc fields -> (
               let w =
                 match List.assoc_opt "text" fields with
                 | Some (`String v) -> Textbox_widget.set_text w v
                 | _ -> w
               in
-              w
+              match List.assoc_opt "title" fields with
+              | Some (`String new_title) -> (
+                  let text = Textbox_widget.get_text w in
+                  let w_width = Textbox_widget.width w in
+                  let title_opt =
+                    if new_title = "" then None else Some new_title
+                  in
+                  match title_opt with
+                  | None ->
+                      Textbox_widget.create ~width:w_width ~initial:text ()
+                  | Some t ->
+                      Textbox_widget.create ~title:t ~width:w_width
+                        ~initial:text ())
+              | _ -> w)
           | _ -> w);
       detect_events =
         (fun old_w new_w ->
@@ -190,7 +208,21 @@ let box_select ~title ~items ?(max_visible = 10) () =
                 | Some s -> `String s
                 | None -> `Null );
             ]);
-      update = (fun w _patch -> w);
+      update =
+        (fun w patch ->
+          match patch with
+          | `Assoc fields -> (
+              match List.assoc_opt "items" fields with
+              | Some (`List raw) ->
+                  let strs =
+                    List.filter_map
+                      (function `String s -> Some s | _ -> None)
+                      raw
+                  in
+                  Select_widget.open_centered ~title ~items:strs
+                    ~to_string:Fun.id ~max_visible ()
+              | _ -> w)
+          | _ -> w);
       detect_events =
         (fun old_w new_w ->
           let old_sel = Select_widget.get_selection old_w in
@@ -273,7 +305,7 @@ let box_switch ?(label = "") ?(on = false) ?(disabled = false) () =
 
 (* --- Display widgets --- *)
 
-let box_pager ?(title = "") ~text () =
+let box_pager ?(title = "") ~text ?(focusable = true) () =
   let w = Pager_widget.open_text ~title text in
   Box
     {
@@ -303,10 +335,11 @@ let box_pager ?(title = "") ~text () =
               | _ -> _w)
           | _ -> _w);
       detect_events = (fun _old _new -> []);
-      focusable = true;
+      focusable;
     }
 
-let box_list ~items ?(item_overrides : List_widget.item list option) ?(indent = 2) ?(expand_all = false) () =
+let box_list ~items ?(item_overrides : List_widget.item list option)
+    ?(indent = 2) ?(expand_all = false) () =
   let actual_items =
     match item_overrides with
     | Some defs -> defs
@@ -321,7 +354,8 @@ let box_list ~items ?(item_overrides : List_widget.item list option) ?(indent = 
       on_key =
         (fun w ~key ->
           let w' = List_widget.handle_key w ~key in
-          (w', true));
+          (* Report handled only when the widget state actually changed *)
+          (w', not (w' == w)));
       query =
         (fun w ->
           `Assoc
@@ -332,7 +366,20 @@ let box_list ~items ?(item_overrides : List_widget.item list option) ?(indent = 
                 | None -> `Null );
               ("cursor", `Int (List_widget.cursor_index w));
             ]);
-      update = (fun w _patch -> w);
+      update =
+        (fun w patch ->
+          match patch with
+          | `Assoc fields -> (
+              match List.assoc_opt "items" fields with
+              | Some (`List raw) ->
+                  let strs =
+                    List.filter_map
+                      (function `String s -> Some s | _ -> None)
+                      raw
+                  in
+                  List_widget.set_items w (List.map List_widget.item strs)
+              | _ -> w)
+          | _ -> w);
       detect_events =
         (fun old_w new_w ->
           let old_sel = List_widget.selected old_w in
@@ -363,7 +410,21 @@ let box_description_list ?(title = "") ~items () =
       render = (fun w ~focus ~size:_ -> Description_list.render w ~focus);
       on_key = (fun w ~key:_ -> (w, false));
       query = (fun _w -> `Assoc []);
-      update = (fun w _patch -> w);
+      update =
+        (fun w patch ->
+          match patch with
+          | `Assoc fields -> (
+              match List.assoc_opt "items" fields with
+              | Some (`List raw) ->
+                  let strs =
+                    List.filter_map
+                      (function `String s -> Some s | _ -> None)
+                      raw
+                  in
+                  Description_list.set_items w
+                    (List.map (fun s -> (s, "")) strs)
+              | _ -> w)
+          | _ -> w);
       detect_events = (fun _old _new -> []);
       focusable = false;
     }

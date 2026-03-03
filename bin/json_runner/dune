@@ -6,6 +6,7 @@
   miaou_composer_bridge
   miaou-core.core
   miaou-core.internals
+  miaou-core.interfaces
   yojson))
 
 (executable
@@ -18,5 +19,7 @@
   miaou-core.helpers
   miaou-core.interfaces
   miaou-runner.tui
+  miaou-driver-web.driver
+  eio
   eio_main
   unix))

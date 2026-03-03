@@ -18,21 +18,21 @@ let register_system () =
             let ic = open_in_bin path in
             let len = in_channel_length ic in
             let buf = really_input_string ic len in
-            close_in ic ;
+            close_in ic;
             Ok buf
           with e -> Error (Printexc.to_string e));
       write_file =
         (fun path contents ->
           try
             let oc = open_out_bin path in
-            output_string oc contents ;
-            close_out oc ;
+            output_string oc contents;
+            close_out oc;
             Ok ()
           with e -> Error (Printexc.to_string e));
       mkdir =
         (fun path ->
           try
-            Unix.mkdir path 0o755 ;
+            Unix.mkdir path 0o755;
             Ok ()
           with e -> Error (Printexc.to_string e));
       run_command =
@@ -64,16 +64,16 @@ let register_system () =
                 (Printf.sprintf ".miaou_probe_%d" (Unix.getpid ()))
             in
             let oc = open_out tmp in
-            output_string oc "" ;
-            close_out oc ;
-            Sys.remove tmp ;
+            output_string oc "";
+            close_out oc;
+            Sys.remove tmp;
             Ok true
           with _ -> Ok false);
       get_env_var = Sys.getenv_opt;
     }
 
 let () =
-  register_system () ;
+  register_system ();
   Eio_main.run @@ fun env ->
   Eio.Switch.run @@ fun sw ->
   Miaou_helpers.Fiber_runtime.init ~env ~sw;

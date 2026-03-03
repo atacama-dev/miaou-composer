@@ -47,7 +47,7 @@ let create_widget (json : Yojson.Safe.t) :
             Ok (id, Widget_registry.box_checkbox ~label ~checked ~disabled ())
         | "textbox" ->
             let title = get_string fields "title" in
-            let width = get_int fields "width" ~default:30 in
+            let width = max 1 (get_int fields "width" ~default:30) in
             let initial = get_string fields "initial" in
             let placeholder = get_string_opt fields "placeholder" in
             let mask = get_bool fields "mask" ~default:false in
@@ -57,8 +57,8 @@ let create_widget (json : Yojson.Safe.t) :
                   ~mask () )
         | "textarea" ->
             let title = get_string fields "title" in
-            let width = get_int fields "width" ~default:40 in
-            let height = get_int fields "height" ~default:5 in
+            let width = max 1 (get_int fields "width" ~default:40) in
+            let height = max 1 (get_int fields "height" ~default:5) in
             let initial = get_string fields "initial" in
             let placeholder = get_string_opt fields "placeholder" in
             Ok
@@ -83,7 +83,8 @@ let create_widget (json : Yojson.Safe.t) :
         | "pager" ->
             let title = get_string fields "title" in
             let text = get_string fields "text" in
-            Ok (id, Widget_registry.box_pager ~title ~text ())
+            let focusable = get_bool fields "focusable" ~default:true in
+            Ok (id, Widget_registry.box_pager ~title ~text ~focusable ())
         | "list" ->
             let items = get_string_list fields "items" in
             let indent = get_int fields "indent" ~default:2 in

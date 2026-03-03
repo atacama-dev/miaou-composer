@@ -10,16 +10,12 @@ type state_scope = Ephemeral | Persistent
 
 type state_var = {
   key : string;
-  typ : [ `String | `Bool | `Int | `Float | `Json ];
+  typ : [ `String | `Bool | `Int | `Float | `Json | `String_list ];
   default : Yojson.Safe.t;
   scope : state_scope;
 }
 
-type state_binding = {
-  key : string;
-  widget_id : string;
-  prop : string;
-}
+type state_binding = { key : string; widget_id : string; prop : string }
 
 type t = {
   id : string;
@@ -32,6 +28,8 @@ type t = {
   mutable state_bindings : state_binding list;
   state : (string, Yojson.Safe.t) Hashtbl.t;
   mutable key_handlers : (string * Action.t) list;
+  mutable init_actions : Action.t list;
+  mutable tools : Tool_def.t list;
 }
 
 type emit_event = { name : string; snapshot : Yojson.Safe.t }
@@ -52,6 +50,8 @@ let create ~id ~layout ~size =
     state_bindings = [];
     state;
     key_handlers = [];
+    init_actions = [];
+    tools = [];
   }
 
 let persistent_state_path page = page.id ^ ".state.json"
@@ -68,26 +68,25 @@ let save_persistent_state page =
         else None)
       page.state_schema
   in
-  if pairs <> [] then
-    (try Yojson.Safe.to_file path (`Assoc pairs) with _ -> ())
+  if pairs <> [] then try Yojson.Safe.to_file path (`Assoc pairs) with _ -> ()
 
 let init_state page =
   List.iter
     (fun (sv : state_var) -> Hashtbl.replace page.state sv.key sv.default)
     page.state_schema;
   let path = persistent_state_path page in
-  (try
-     match Yojson.Safe.from_file path with
-     | `Assoc fields ->
-         List.iter
-           (fun (sv : state_var) ->
-             if sv.scope = Persistent then
-               match List.assoc_opt sv.key fields with
-               | Some v -> Hashtbl.replace page.state sv.key v
-               | None -> ())
-           page.state_schema
-     | _ -> ()
-   with _ -> ())
+  try
+    match Yojson.Safe.from_file path with
+    | `Assoc fields ->
+        List.iter
+          (fun (sv : state_var) ->
+            if sv.scope = Persistent then
+              match List.assoc_opt sv.key fields with
+              | Some v -> Hashtbl.replace page.state sv.key v
+              | None -> ())
+          page.state_schema
+    | _ -> ()
+  with _ -> ()
 
 let rebuild_focus page =
   let current = Focus_ring.current page.focus_ring in
@@ -138,11 +137,11 @@ let set_state_value page ~key ~value =
           (update_widget page ~id:b.widget_id
              ~patch:(`Assoc [ (b.prop, value) ])))
     page.state_bindings;
-  (match
-     List.find_opt (fun (sv : state_var) -> sv.key = key) page.state_schema
-   with
+  match
+    List.find_opt (fun (sv : state_var) -> sv.key = key) page.state_schema
+  with
   | Some sv when sv.scope = Persistent -> save_persistent_state page
-  | _ -> ())
+  | _ -> ()
 
 let reset_page_state page =
   List.iter
@@ -237,13 +236,17 @@ let render page =
         let inner_size =
           {
             LTerm_geom.rows =
-              max 0 (size.LTerm_geom.rows - border_h - padding.top - padding.bottom);
+              max 0
+                (size.LTerm_geom.rows - border_h - padding.top - padding.bottom);
             cols =
-              max 0 (size.LTerm_geom.cols - border_w - padding.left - padding.right);
+              max 0
+                (size.LTerm_geom.cols - border_w - padding.left - padding.right);
           }
         in
         let content =
-          match child with Some c -> render_node ~size:inner_size c | None -> ""
+          match child with
+          | Some c -> render_node ~size:inner_size c
+          | None -> ""
         in
         let box_style =
           match style with
@@ -268,7 +271,9 @@ let render page =
           { size with LTerm_geom.cols = max 0 (size.LTerm_geom.cols - 2) }
         in
         let body =
-          match child with Some c -> render_node ~size:inner_size c | None -> ""
+          match child with
+          | Some c -> render_node ~size:inner_size c
+          | None -> ""
         in
         let card = Card_widget.create ?title ?footer ~body () in
         Card_widget.render card ~cols:size.LTerm_geom.cols
@@ -355,8 +360,7 @@ let rec execute_action page (action : Action.t) : emit_event list =
       (* Modal handling is done at the session/MCP level *)
       []
   | Close_modal _ -> []
-  | Navigate { target } ->
-      [ { name = "$navigate"; snapshot = `String target } ]
+  | Navigate { target } -> [ { name = "$navigate"; snapshot = `String target } ]
   | Back -> [ { name = "$back"; snapshot = `Null } ]
   | Quit -> [ { name = "$quit"; snapshot = `Null } ]
   | Set_state { key; value } ->
@@ -396,8 +400,7 @@ let rec execute_action page (action : Action.t) : emit_event list =
       let new_val = current +. by in
       let value =
         match
-          List.find_opt (fun (sv : state_var) -> sv.key = key)
-            page.state_schema
+          List.find_opt (fun (sv : state_var) -> sv.key = key) page.state_schema
         with
         | Some sv when sv.typ = `Int -> `Int (int_of_float new_val)
         | _ -> `Float new_val
@@ -406,12 +409,37 @@ let rec execute_action page (action : Action.t) : emit_event list =
       []
   | Reset_state { key } ->
       (match
-         List.find_opt (fun (sv : state_var) -> sv.key = key)
-           page.state_schema
+         List.find_opt (fun (sv : state_var) -> sv.key = key) page.state_schema
        with
       | Some sv -> set_state_value page ~key ~value:sv.default
       | None -> ());
       []
+  | Sequence actions -> List.concat_map (fun a -> execute_action page a) actions
+  | Call_tool { name; args } ->
+      let resolve s =
+        if String.length s > 7 && String.sub s 0 7 = "$state." then
+          let key = String.sub s 7 (String.length s - 7) in
+          match Hashtbl.find_opt page.state key with
+          | Some (`String v) -> v
+          | Some (`Int n) -> string_of_int n
+          | Some (`Float f) -> string_of_float f
+          | Some (`Bool b) -> string_of_bool b
+          | _ -> ""
+        else s
+      in
+      let resolved = List.map (fun (k, v) -> (k, resolve v)) args in
+      [
+        {
+          name = "$tool_call";
+          snapshot =
+            `Assoc
+              [
+                ("tool_name", `String name);
+                ( "args",
+                  `Assoc (List.map (fun (k, v) -> (k, `String v)) resolved) );
+              ];
+        };
+      ]
 
 and query_all_state page =
   let widgets =
@@ -429,36 +457,34 @@ and query_all_state page =
   `Assoc widgets
 
 (** Send a key to the focused widget, detect events, execute wirings. Returns
-    (emitted_events). Page-level key_handlers are checked first. *)
+    (emitted_events). Widget gets priority for non-Tab keys; Tab cycles focus
+    unless a key_handler overrides it. *)
 let send_key page ~key =
   let emitted = ref [] in
-  (* Check page-level key handlers first *)
-  let key_handled =
-    match List.assoc_opt key page.key_handlers with
-    | Some action ->
-        let evts = execute_action page action in
-        emitted := !emitted @ evts;
-        true
-    | None -> false
-  in
-  if not key_handled then
-    (* Handle Tab/Shift-Tab for focus cycling *)
-    (match key with
-    | "Tab" | "S-Tab" ->
-        let ring', _result = Focus_ring.handle_key page.focus_ring ~key in
-        page.focus_ring <- ring'
-    | _ -> (
+  match key with
+  | "Tab" | "S-Tab" ->
+      (* Tab cycles focus, but a key_handler can override *)
+      (match List.assoc_opt key page.key_handlers with
+      | Some action ->
+          let evts = execute_action page action in
+          emitted := !emitted @ evts
+      | None ->
+          let ring', _result = Focus_ring.handle_key page.focus_ring ~key in
+          page.focus_ring <- ring');
+      !emitted
+  | _ ->
+      (* Forward key to focused widget first *)
+      let widget_handled =
         match Focus_ring.current page.focus_ring with
-        | None -> ()
+        | None -> false
         | Some focused_id -> (
             match Hashtbl.find_opt page.widgets focused_id with
-            | None -> ()
+            | None -> false
             | Some wb ->
-                let wb', _handled, events =
+                let wb', handled, events =
                   Widget_box.on_key_with_events wb ~key
                 in
                 Hashtbl.replace page.widgets focused_id wb';
-                (* Process events through wirings *)
                 List.iter
                   (fun (event_name, _event_data) ->
                     match
@@ -469,8 +495,17 @@ let send_key page ~key =
                         let evts = execute_action page action in
                         emitted := !emitted @ evts
                     | None -> ())
-                  events)));
-  !emitted
+                  events;
+                handled)
+      in
+      (* If widget didn't handle it, try page-level key handlers *)
+      (if not widget_handled then
+         match List.assoc_opt key page.key_handlers with
+         | Some action ->
+             let evts = execute_action page action in
+             emitted := !emitted @ evts
+         | None -> ());
+      !emitted
 
 let query_focus page =
   let current = Focus_ring.current page.focus_ring in

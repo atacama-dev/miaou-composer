@@ -121,12 +121,22 @@ let make_for_existing_widget widget_id widget_type params_json =
         let base = param_to_field p in
         let new_kind =
           match p.typ with
-          | Catalog.Bool -> Bool (get_bool p.name (match base.kind with Bool b -> b | _ -> false))
+          | Catalog.Bool ->
+              Bool
+                (get_bool p.name
+                   (match base.kind with Bool b -> b | _ -> false))
           | Catalog.Int ->
-              let n = get_int p.name (match base.kind with Int s -> (match int_of_string_opt s with Some n -> n | None -> 0) | _ -> 0) in
+              let n =
+                get_int p.name
+                  (match base.kind with
+                  | Int s -> (
+                      match int_of_string_opt s with Some n -> n | None -> 0)
+                  | _ -> 0)
+              in
               Int (string_of_int n)
           | Catalog.String | Catalog.Float ->
-              Text (get_str p.name (match base.kind with Text s -> s | _ -> ""))
+              Text
+                (get_str p.name (match base.kind with Text s -> s | _ -> ""))
           | Catalog.String_list ->
               let s =
                 match Yojson.Safe.Util.member p.name params_json with
@@ -136,11 +146,12 @@ let make_for_existing_widget widget_id widget_type params_json =
                          (function `String s -> Some s | _ -> None)
                          items)
                 | `String s -> s
-                | _ -> (match base.kind with Text s -> s | _ -> "")
+                | _ -> ( match base.kind with Text s -> s | _ -> "")
               in
               Text s
           | Catalog.Enum _ ->
-              Text (get_str p.name (match base.kind with Text s -> s | _ -> ""))
+              Text
+                (get_str p.name (match base.kind with Text s -> s | _ -> ""))
         in
         { base with kind = new_kind }
       in
@@ -157,8 +168,7 @@ let make_for_existing_widget widget_id widget_type params_json =
 let make_wiring_action_form action_type widget_ids =
   let is_state_action =
     match action_type with
-    | "set_state" | "copy_widget_to_state" | "inc_state" | "reset_state" ->
-        true
+    | "set_state" | "copy_widget_to_state" | "inc_state" | "reset_state" -> true
     | _ -> false
   in
   if is_state_action then
@@ -180,7 +190,10 @@ let make_wiring_action_form action_type widget_ids =
               (List.nth_opt widget_ids 0 |> Option.value ~default:"");
           ]
       | "inc_state" ->
-          [ make_text_field "by" "Increment By" ~required:false ~placeholder:"1" "1" ]
+          [
+            make_text_field "by" "Increment By" ~required:false ~placeholder:"1"
+              "1";
+          ]
       | "reset_state" -> []
       | _ -> []
     in
@@ -246,9 +259,7 @@ let make_state_var_form ?(key = "") ?(typ = "int") ?(default = "0")
 (** Parse a state variable form into a Page.state_var. *)
 let form_to_state_var t =
   let get name =
-    match
-      Array.find_opt (fun f -> f.name = name) t.fields
-    with
+    match Array.find_opt (fun f -> f.name = name) t.fields with
     | Some { kind = Text s; _ } -> s
     | _ -> ""
   in
@@ -267,9 +278,8 @@ let form_to_state_var t =
     let default_str = get "default" in
     let default =
       (* Try to parse as JSON; fall back to string or null *)
-      (try Yojson.Safe.from_string default_str
-       with _ ->
-         if default_str = "" then `Null else `String default_str)
+      try Yojson.Safe.from_string default_str
+      with _ -> if default_str = "" then `Null else `String default_str
     in
     let scope_str = get "scope" in
     let scope =

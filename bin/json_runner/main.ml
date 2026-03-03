@@ -28,8 +28,34 @@ let register_system () =
             Ok ()
           with e -> Error (Printexc.to_string e));
       run_command =
-        (fun ~argv:_ ~cwd:_ ->
-          Ok { Sys_cap.exit_code = 0; stdout = ""; stderr = "" });
+        (fun ~argv ~cwd ->
+          match argv with
+          | [] -> Error "empty argv"
+          | _ -> (
+              try
+                let orig = Sys.getcwd () in
+                (match cwd with Some d -> Unix.chdir d | None -> ());
+                let cmd = String.concat " " (List.map Filename.quote argv) in
+                let ic, oc, ec =
+                  Unix.open_process_full cmd (Unix.environment ())
+                in
+                close_out oc;
+                let read_all ch =
+                  let buf = Buffer.create 256 in
+                  (try
+                     while true do
+                       Buffer.add_channel buf ch 1
+                     done
+                   with End_of_file -> ());
+                  Buffer.contents buf
+                in
+                let stdout = read_all ic in
+                let stderr = read_all ec in
+                let st = Unix.close_process_full (ic, oc, ec) in
+                (match cwd with Some _ -> Unix.chdir orig | None -> ());
+                let exit_code = match st with Unix.WEXITED n -> n | _ -> 1 in
+                Ok { Sys_cap.exit_code; stdout; stderr }
+              with e -> Error (Printexc.to_string e)));
       get_current_user_info =
         (fun () ->
           try
@@ -70,10 +96,24 @@ let () =
   Eio.Switch.run @@ fun sw ->
   Miaou_helpers.Fiber_runtime.init ~env ~sw;
   let module Page_impl =
-    Miaou_core.Direct_page.With_defaults
-      (Miaou_composer_json_runner.Runner_page) in
+    Miaou_core.Direct_page.With_defaults (Miaou_composer_json_runner.Runner_page) in
   let module Full_page = Miaou_core.Direct_page.Make (Page_impl) in
   let page : Miaou_core.Registry.page =
     (module Full_page : Miaou_core.Tui_page.PAGE_SIG)
   in
-  ignore (Miaou_runner_tui.Runner_tui.run page)
+  let on_frame =
+    match Sys.getenv_opt "MIAOU_WEB_VIEWER_PORT" with
+    | Some port_str ->
+        let port = int_of_string port_str in
+        let viewer =
+          Miaou_driver_web.Web_viewer.start ~sw ~net:(Eio.Stdenv.net env) ~port
+            ()
+        in
+        Printf.eprintf "Web viewer: %s\n%!"
+          (Miaou_driver_web.Web_viewer.url viewer);
+        Some
+          (fun ~rows ~cols data ->
+            Miaou_driver_web.Web_viewer.broadcast viewer ~rows ~cols data)
+    | None -> None
+  in
+  ignore (Miaou_runner_tui.Runner_tui.run ?on_frame page)

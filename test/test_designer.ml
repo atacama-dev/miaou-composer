@@ -253,7 +253,8 @@ let test_state_schema_parsed () =
   | Error e -> Alcotest.failf "page_of_json failed: %s" e
   | Ok page ->
       Alcotest.(check int)
-        "three state vars" 3 (List.length page.Page.state_schema);
+        "three state vars" 3
+        (List.length page.Page.state_schema);
       let sv = List.hd page.Page.state_schema in
       Alcotest.(check string) "first key is count" "count" sv.Page.key;
       Alcotest.(check bool)
@@ -282,7 +283,8 @@ let test_state_binding_sync () =
            (Action.Set_state { key = "enabled"; value = `Bool true }));
       (* State key updated *)
       let state_val = Hashtbl.find_opt page.Page.state "enabled" in
-      Alcotest.(check bool) "state key updated" true
+      Alcotest.(check bool)
+        "state key updated" true
         (state_val = Some (`Bool true));
       (* Widget chk.checked should be true *)
       let chk_state =
@@ -298,7 +300,8 @@ let test_state_binding_sync () =
             | None -> `Null)
         | _ -> `Null
       in
-      Alcotest.(check bool) "bound widget updated" true
+      Alcotest.(check bool)
+        "bound widget updated" true
         (checked_val = `Bool true)
 
 let test_inc_state_action () =
@@ -321,8 +324,7 @@ let test_reset_state_action () =
       ignore
         (Page.execute_action page
            (Action.Set_state { key = "count"; value = `Int 99 }));
-      ignore
-        (Page.execute_action page (Action.Reset_state { key = "count" }));
+      ignore (Page.execute_action page (Action.Reset_state { key = "count" }));
       let v = Hashtbl.find_opt page.Page.state "count" in
       Alcotest.(check bool) "reset to default" true (v = Some (`Int 0))
 
@@ -391,7 +393,8 @@ let test_key_handlers_parsed () =
   | Error e -> Alcotest.failf "page_of_json failed: %s" e
   | Ok page ->
       Alcotest.(check int)
-        "two key handlers" 2 (List.length page.Page.key_handlers);
+        "two key handlers" 2
+        (List.length page.Page.key_handlers);
       let keys = List.map fst page.Page.key_handlers in
       Alcotest.(check bool) "has q" true (List.mem "q" keys);
       Alcotest.(check bool) "has n" true (List.mem "n" keys)
@@ -452,7 +455,9 @@ let test_key_handler_blocks_tab () =
         Miaou_internals.Focus_ring.current page.Page.focus_ring
       in
       (* focus should NOT have changed because key_handler consumed Tab *)
-      Alcotest.(check bool) "focus unchanged" true (focused_before = focused_after);
+      Alcotest.(check bool)
+        "focus unchanged" true
+        (focused_before = focused_after);
       Alcotest.(check int) "one event" 1 (List.length events);
       Alcotest.(check string)
         "emits tab_pressed" "tab_pressed" (List.hd events).Page.name
@@ -461,7 +466,7 @@ let test_key_handlers_roundtrip () =
   let json = Yojson.Safe.from_string (make_key_handler_page_json ()) in
   match Bridge.Page_codec.page_of_json json with
   | Error e -> Alcotest.failf "page_of_json failed: %s" e
-  | Ok page ->
+  | Ok page -> (
       let exported = Bridge.Page_codec.page_to_json page in
       match exported with
       | `Assoc fields -> (
@@ -470,7 +475,276 @@ let test_key_handlers_roundtrip () =
               Alcotest.(check int)
                 "two key_handlers in export" 2 (List.length khs)
           | _ -> Alcotest.fail "key_handlers missing from export")
-      | _ -> Alcotest.fail "export is not an object"
+      | _ -> Alcotest.fail "export is not an object")
+
+(* ---- US7 tests ---- *)
+
+let test_sequence_runs_all_actions () =
+  (* Use Set_state actions: no widget needed, clearly verifiable *)
+  let json =
+    `Assoc
+      [
+        ("id", `String "p");
+        ( "layout",
+          `Assoc
+            [
+              ("type", `String "flex");
+              ("direction", `String "column");
+              ("gap", `Int 0);
+              ("children", `List []);
+            ] );
+        ( "state_schema",
+          `List
+            [
+              `Assoc
+                [
+                  ("key", `String "a");
+                  ("type", `String "string");
+                  ("default", `String "");
+                  ("scope", `String "ephemeral");
+                ];
+              `Assoc
+                [
+                  ("key", `String "b");
+                  ("type", `String "string");
+                  ("default", `String "");
+                  ("scope", `String "ephemeral");
+                ];
+            ] );
+      ]
+  in
+  let page =
+    match Miaou_composer_bridge.Page_codec.page_of_json json with
+    | Ok p -> p
+    | Error e -> Alcotest.failf "parse: %s" e
+  in
+  let action =
+    Miaou_composer_lib.Action.Sequence
+      [
+        Miaou_composer_lib.Action.Set_state
+          { key = "a"; value = `String "hello" };
+        Miaou_composer_lib.Action.Set_state
+          { key = "b"; value = `String "world" };
+      ]
+  in
+  let events = Miaou_composer_lib.Page.execute_action page action in
+  Alcotest.(check int) "no events from set_state" 0 (List.length events);
+  let va = Hashtbl.find_opt page.Miaou_composer_lib.Page.state "a" in
+  let vb = Hashtbl.find_opt page.Miaou_composer_lib.Page.state "b" in
+  let json_str = function
+    | None -> "none"
+    | Some j -> Yojson.Safe.to_string j
+  in
+  Alcotest.(check string) "state a" "\"hello\"" (json_str va);
+  Alcotest.(check string) "state b" "\"world\"" (json_str vb)
+
+let make_empty_page () =
+  Miaou_composer_lib.Page.create ~id:"p"
+    ~layout:
+      (Miaou_composer_lib.Layout_tree.Flex
+         {
+           direction = Miaou_composer_lib.Layout_tree.Column;
+           gap = 0;
+           padding =
+             {
+               Miaou_composer_lib.Layout_tree.left = 0;
+               right = 0;
+               top = 0;
+               bottom = 0;
+             };
+           justify = Miaou_composer_lib.Layout_tree.Start;
+           align_items = Miaou_composer_lib.Layout_tree.Stretch;
+           children = [];
+           basis = Miaou_composer_lib.Layout_tree.Auto;
+         })
+    ~size:{ LTerm_geom.rows = 10; cols = 40 }
+
+let test_call_tool_emits_event () =
+  let page = make_empty_page () in
+  let action =
+    Miaou_composer_lib.Action.Call_tool { name = "my_tool"; args = [] }
+  in
+  let events = Miaou_composer_lib.Page.execute_action page action in
+  Alcotest.(check int) "one event" 1 (List.length events);
+  let ev = List.hd events in
+  Alcotest.(check string)
+    "event name is $tool_call" "$tool_call" ev.Miaou_composer_lib.Page.name;
+  match ev.snapshot with
+  | `Assoc fields -> (
+      match List.assoc_opt "tool_name" fields with
+      | Some (`String name) ->
+          Alcotest.(check string) "tool_name in snapshot" "my_tool" name
+      | _ -> Alcotest.fail "tool_name not in snapshot")
+  | _ -> Alcotest.fail "snapshot not an object"
+
+let test_call_tool_resolves_state () =
+  let page = make_empty_page () in
+  Hashtbl.replace page.Miaou_composer_lib.Page.state "selected_file"
+    (`String "src/foo.ml");
+  let action =
+    Miaou_composer_lib.Action.Call_tool
+      { name = "git_diff"; args = [ ("file", "$state.selected_file") ] }
+  in
+  let events = Miaou_composer_lib.Page.execute_action page action in
+  let ev = List.hd events in
+  match ev.snapshot with
+  | `Assoc fields -> (
+      match List.assoc_opt "args" fields with
+      | Some (`Assoc args) -> (
+          match List.assoc_opt "file" args with
+          | Some (`String v) ->
+              Alcotest.(check string) "$state resolved" "src/foo.ml" v
+          | _ -> Alcotest.fail "arg 'file' not found")
+      | _ -> Alcotest.fail "args not found")
+  | _ -> Alcotest.fail "snapshot not object"
+
+let test_init_actions_roundtrip () =
+  let json =
+    `Assoc
+      [
+        ("id", `String "p");
+        ( "layout",
+          `Assoc
+            [
+              ("type", `String "flex");
+              ("direction", `String "column");
+              ("gap", `Int 0);
+              ("children", `List []);
+            ] );
+        ( "init_actions",
+          `List
+            [
+              `Assoc
+                [
+                  ("type", `String "call_tool");
+                  ("name", `String "git_status");
+                  ("args", `Assoc []);
+                ];
+              `Assoc
+                [
+                  ("type", `String "call_tool");
+                  ("name", `String "git_log");
+                  ("args", `Assoc []);
+                ];
+            ] );
+      ]
+  in
+  let page =
+    match Miaou_composer_bridge.Page_codec.page_of_json json with
+    | Ok p -> p
+    | Error e -> Alcotest.failf "parse: %s" e
+  in
+  Alcotest.(check int)
+    "2 init_actions" 2
+    (List.length page.Miaou_composer_lib.Page.init_actions);
+  let out_json = Miaou_composer_bridge.Page_codec.page_to_json page in
+  let page2 =
+    match Miaou_composer_bridge.Page_codec.page_of_json out_json with
+    | Ok p -> p
+    | Error e -> Alcotest.failf "re-parse: %s" e
+  in
+  Alcotest.(check int)
+    "2 init_actions after roundtrip" 2
+    (List.length page2.Miaou_composer_lib.Page.init_actions)
+
+let test_string_list_binding () =
+  let json =
+    `Assoc
+      [
+        ("id", `String "p");
+        ( "layout",
+          `Assoc
+            [
+              ("type", `String "flex");
+              ("direction", `String "column");
+              ("gap", `Int 0);
+              ( "children",
+                `List
+                  [
+                    `Assoc
+                      [
+                        ("type", `String "list");
+                        ("id", `String "files_list");
+                        ("items", `List []);
+                      ];
+                  ] );
+            ] );
+        ( "state_schema",
+          `List
+            [
+              `Assoc
+                [
+                  ("key", `String "status_files");
+                  ("type", `String "string_list");
+                  ("default", `List []);
+                  ("scope", `String "ephemeral");
+                ];
+            ] );
+        ( "state_bindings",
+          `List
+            [
+              `Assoc
+                [
+                  ("key", `String "status_files");
+                  ("widget_id", `String "files_list");
+                  ("prop", `String "items");
+                ];
+            ] );
+      ]
+  in
+  let page =
+    match Miaou_composer_bridge.Page_codec.page_of_json json with
+    | Ok p -> p
+    | Error e -> Alcotest.failf "parse: %s" e
+  in
+  Miaou_composer_lib.Page.set_state_value page ~key:"status_files"
+    ~value:(`List [ `String "M src/foo.ml"; `String "?? new.ml" ]);
+  let wb = Hashtbl.find page.Miaou_composer_lib.Page.widgets "files_list" in
+  let q = Miaou_composer_lib.Widget_box.query wb in
+  match q with
+  | `Assoc fields -> (
+      match List.assoc_opt "cursor" fields with
+      | Some (`Int _) -> ()
+      | _ -> Alcotest.fail "list widget query missing cursor")
+  | _ -> Alcotest.fail "list widget query not assoc"
+
+let test_tool_codec_process_roundtrip () =
+  let tool =
+    Miaou_composer_lib.Tool_def.Process
+      {
+        name = "git_diff";
+        bin = "git";
+        argv = [ "diff"; "--"; "$state.selected_file" ];
+        stdin = None;
+        cwd = Some "$state.repo_path";
+        capture_stdout = Some "diff_text";
+        capture_stdout_lines = None;
+        capture_json_fields = false;
+        on_exit =
+          Some
+            (Miaou_composer_lib.Action.Call_tool { name = "refresh"; args = [] });
+      }
+  in
+  let json = Miaou_composer_bridge.Tool_codec.tool_def_to_json tool in
+  match Miaou_composer_bridge.Tool_codec.tool_def_of_json json with
+  | Error e -> Alcotest.failf "decode failed: %s" e
+  | Ok tool2 -> (
+      Alcotest.(check string)
+        "name preserved" "git_diff"
+        (Miaou_composer_lib.Tool_def.name tool2);
+      match tool2 with
+      | Miaou_composer_lib.Tool_def.Process
+          { bin; argv; cwd; capture_stdout; on_exit; _ } -> (
+          Alcotest.(check string) "bin" "git" bin;
+          Alcotest.(check int) "argv len" 3 (List.length argv);
+          Alcotest.(check (option string)) "cwd" (Some "$state.repo_path") cwd;
+          Alcotest.(check (option string))
+            "capture_stdout" (Some "diff_text") capture_stdout;
+          match on_exit with
+          | Some (Miaou_composer_lib.Action.Call_tool { name; _ }) ->
+              Alcotest.(check string) "on_exit tool name" "refresh" name
+          | _ -> Alcotest.fail "on_exit not Call_tool")
+      | _ -> Alcotest.fail "not a Process tool")
 
 (* ---- Runner ---- *)
 
@@ -517,8 +791,7 @@ let () =
           Alcotest.test_case "set_state action" `Quick test_set_state_action;
           Alcotest.test_case "binding sync" `Quick test_state_binding_sync;
           Alcotest.test_case "inc_state action" `Quick test_inc_state_action;
-          Alcotest.test_case "reset_state action" `Quick
-            test_reset_state_action;
+          Alcotest.test_case "reset_state action" `Quick test_reset_state_action;
           Alcotest.test_case "roundtrip state_schema" `Quick
             test_state_roundtrip;
           Alcotest.test_case "designer add/remove var" `Quick
@@ -526,8 +799,7 @@ let () =
         ] );
       ( "US6: key_handlers",
         [
-          Alcotest.test_case "handlers parsed" `Quick
-            test_key_handlers_parsed;
+          Alcotest.test_case "handlers parsed" `Quick test_key_handlers_parsed;
           Alcotest.test_case "quit key emits $quit" `Quick
             test_quit_key_emits_system_event;
           Alcotest.test_case "navigate key emits $navigate" `Quick
@@ -536,5 +808,20 @@ let () =
             test_key_handler_blocks_tab;
           Alcotest.test_case "roundtrip key_handlers" `Quick
             test_key_handlers_roundtrip;
+        ] );
+      ( "US7: tool system",
+        [
+          Alcotest.test_case "Sequence runs all sub-actions" `Quick
+            test_sequence_runs_all_actions;
+          Alcotest.test_case "Call_tool emits $tool_call" `Quick
+            test_call_tool_emits_event;
+          Alcotest.test_case "Call_tool resolves $state.KEY" `Quick
+            test_call_tool_resolves_state;
+          Alcotest.test_case "init_actions roundtrip" `Quick
+            test_init_actions_roundtrip;
+          Alcotest.test_case "string_list type bound to list" `Quick
+            test_string_list_binding;
+          Alcotest.test_case "tool_codec process roundtrip" `Quick
+            test_tool_codec_process_roundtrip;
         ] );
     ]

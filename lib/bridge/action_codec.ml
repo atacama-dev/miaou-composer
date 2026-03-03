@@ -2,7 +2,7 @@
 
 open Miaou_composer_lib
 
-let action_to_json (a : Action.t) : Yojson.Safe.t =
+let rec action_to_json (a : Action.t) : Yojson.Safe.t =
   match a with
   | Set_text { target; value } ->
       `Assoc
@@ -70,7 +70,9 @@ let action_to_json (a : Action.t) : Yojson.Safe.t =
         ]
   | Set_state { key; value } ->
       `Assoc
-        [ ("type", `String "set_state"); ("key", `String key); ("value", value) ]
+        [
+          ("type", `String "set_state"); ("key", `String key); ("value", value);
+        ]
   | Copy_widget_to_state { key; source } ->
       `Assoc
         [
@@ -81,12 +83,23 @@ let action_to_json (a : Action.t) : Yojson.Safe.t =
   | Inc_state { key; by } ->
       `Assoc
         [
-          ("type", `String "inc_state");
-          ("key", `String key);
-          ("by", `Float by);
+          ("type", `String "inc_state"); ("key", `String key); ("by", `Float by);
         ]
   | Reset_state { key } ->
       `Assoc [ ("type", `String "reset_state"); ("key", `String key) ]
+  | Sequence actions ->
+      `Assoc
+        [
+          ("type", `String "sequence");
+          ("steps", `List (List.map action_to_json actions));
+        ]
+  | Call_tool { name; args } ->
+      `Assoc
+        [
+          ("type", `String "call_tool");
+          ("name", `String name);
+          ("args", `Assoc (List.map (fun (k, v) -> (k, `String v)) args));
+        ]
 
 let get_string fields key =
   match List.assoc_opt key fields with Some (`String s) -> s | _ -> ""
@@ -111,7 +124,7 @@ let get_float fields key ~default =
 let get_json fields key =
   match List.assoc_opt key fields with Some v -> v | None -> `Null
 
-let action_of_json (json : Yojson.Safe.t) : (Action.t, string) result =
+let rec action_of_json (json : Yojson.Safe.t) : (Action.t, string) result =
   match json with
   | `Assoc fields -> (
       match List.assoc_opt "type" fields with
@@ -203,6 +216,35 @@ let action_of_json (json : Yojson.Safe.t) : (Action.t, string) result =
                })
       | Some (`String "reset_state") ->
           Ok (Reset_state { key = get_string fields "key" })
+      | Some (`String "sequence") -> (
+          match List.assoc_opt "steps" fields with
+          | Some (`List steps) ->
+              let results = List.map action_of_json steps in
+              let errors =
+                List.filter_map
+                  (function Error e -> Some e | Ok _ -> None)
+                  results
+              in
+              if errors <> [] then Error (String.concat "; " errors)
+              else
+                Ok
+                  (Sequence
+                     (List.filter_map
+                        (function Ok a -> Some a | Error _ -> None)
+                        results))
+          | _ -> Ok (Sequence []))
+      | Some (`String "call_tool") ->
+          let name = get_string fields "name" in
+          let args =
+            match List.assoc_opt "args" fields with
+            | Some (`Assoc pairs) ->
+                List.filter_map
+                  (fun (k, v) ->
+                    match v with `String s -> Some (k, s) | _ -> None)
+                  pairs
+            | _ -> []
+          in
+          Ok (Call_tool { name; args })
       | Some (`String t) -> Error ("Unknown action type: " ^ t)
       | _ -> Error "Action must have a 'type' field")
   | _ -> Error "Action must be an object"

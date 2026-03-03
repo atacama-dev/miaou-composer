@@ -57,7 +57,8 @@ let remove_by_target (t : t) ~target_id =
           | Set_visible { target; _ } -> target = target_id
           | Set_items { target; _ } -> target = target_id
           | Push_modal _ | Close_modal _ | Navigate _ | Back | Quit | Emit _
-          | Set_state _ | Copy_widget_to_state _ | Inc_state _ | Reset_state _ ->
+          | Set_state _ | Copy_widget_to_state _ | Inc_state _ | Reset_state _
+          | Sequence _ | Call_tool _ ->
               false
         in
         if targets_widget then key :: acc else acc)

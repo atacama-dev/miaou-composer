@@ -157,7 +157,16 @@ let rec layout_of_json (json : Yojson.Safe.t) :
                    children_results)
             in
             Ok
-              ( Flex { direction; gap; padding; justify; align_items; children; basis },
+              ( Flex
+                  {
+                    direction;
+                    gap;
+                    padding;
+                    justify;
+                    align_items;
+                    children;
+                    basis;
+                  },
                 List.concat widget_lists )
       | Some (`String "grid") ->
           let rows =
@@ -239,7 +248,8 @@ let rec layout_of_json (json : Yojson.Safe.t) :
                     ( Boxed { title; style; padding; child = Some child; basis },
                       widgets )
               | Error e -> Error e)
-          | None -> Ok (Boxed { title; style; padding; child = None; basis }, []))
+          | None -> Ok (Boxed { title; style; padding; child = None; basis }, [])
+          )
       | Some (`String "card") -> (
           let title = get_string_opt fields "title" in
           let footer = get_string_opt fields "footer" in
@@ -254,9 +264,11 @@ let rec layout_of_json (json : Yojson.Safe.t) :
               match layout_of_json child_json with
               | Ok (child, widgets) ->
                   Ok
-                    (Card { title; footer; accent; child = Some child; basis }, widgets)
+                    ( Card { title; footer; accent; child = Some child; basis },
+                      widgets )
               | Error e -> Error e)
-          | None -> Ok (Card { title; footer; accent; child = None; basis }, []))
+          | None -> Ok (Card { title; footer; accent; child = None; basis }, [])
+          )
       | Some (`String typ) ->
           (* Must be a widget leaf *)
           let id = get_string fields "id" in
@@ -340,8 +352,8 @@ let rec layout_to_json node ~widget_to_json =
             ("padding", padding_to_json padding);
           ]
         @ (match basis with
-           | Layout_tree.Auto -> []
-           | b -> [ ("basis", basis_to_json b) ])
+          | Layout_tree.Auto -> []
+          | b -> [ ("basis", basis_to_json b) ])
         @
         match child with
         | Some c -> [ ("child", layout_to_json c ~widget_to_json) ]
@@ -355,8 +367,8 @@ let rec layout_to_json node ~widget_to_json =
         @ (match footer with Some f -> [ ("footer", `String f) ] | None -> [])
         @ (match accent with Some a -> [ ("accent", `Int a) ] | None -> [])
         @ (match basis with
-           | Layout_tree.Auto -> []
-           | b -> [ ("basis", basis_to_json b) ])
+          | Layout_tree.Auto -> []
+          | b -> [ ("basis", basis_to_json b) ])
         @
         match child with
         | Some c -> [ ("child", layout_to_json c ~widget_to_json) ]

@@ -274,7 +274,9 @@ let handle_tool (session : Session.t) ~tool_name
                          (List.map
                             (fun (e : Page.emit_event) ->
                               `Assoc
-                                [ ("name", `String e.name); ("state", e.snapshot) ])
+                                [
+                                  ("name", `String e.name); ("state", e.snapshot);
+                                ])
                             events) );
                    ])))
   | "render" -> (
@@ -335,9 +337,7 @@ let handle_tool (session : Session.t) ~tool_name
           widgets
       in
       (* Append registry-only widgets (not in compositor catalog) *)
-      let catalog_names =
-        List.map (fun e -> e.Catalog.name) widgets
-      in
+      let catalog_names = List.map (fun e -> e.Catalog.name) widgets in
       let registry_only =
         List.filter_map
           (fun (entry : Miaou_registry.entry) ->
@@ -345,10 +345,7 @@ let handle_tool (session : Session.t) ~tool_name
             else
               Some
                 (`Assoc
-                   [
-                     ("name", `String entry.name);
-                     ("mli", `String entry.mli);
-                   ]))
+                   [ ("name", `String entry.name); ("mli", `String entry.mli) ]))
           (Miaou_registry.list ())
       in
       ok_result
@@ -421,6 +418,7 @@ let handle_tool (session : Session.t) ~tool_name
           let cols =
             match get_int args "cols" with Some n -> n | None -> 80
           in
+          let viewer_port = get_int args "viewer_port" in
           (* Build environment: current env + MIAOU_DRIVER=headless + extras *)
           let base_env = Unix.environment () in
           let extra_env =
@@ -432,6 +430,11 @@ let handle_tool (session : Session.t) ~tool_name
                   pairs
             | _ -> []
           in
+          let viewer_env =
+            match viewer_port with
+            | Some p -> [ Printf.sprintf "MIAOU_WEB_VIEWER_PORT=%d" p ]
+            | None -> []
+          in
           let env =
             Array.append base_env
               (Array.of_list
@@ -440,7 +443,7 @@ let handle_tool (session : Session.t) ~tool_name
                     Printf.sprintf "MIAOU_HEADLESS_ROWS=%d" rows;
                     Printf.sprintf "MIAOU_HEADLESS_COLS=%d" cols;
                   ]
-                 @ extra_env))
+                 @ viewer_env @ extra_env))
           in
           let ic_read, ic_write = Unix.pipe () in
           let oc_read, oc_write = Unix.pipe () in
@@ -480,14 +483,26 @@ let handle_tool (session : Session.t) ~tool_name
                 | Ok text ->
                     let sid = fresh_session_id () in
                     Hashtbl.replace headless_sessions sid s;
+                    let viewer_url =
+                      match viewer_port with
+                      | Some p ->
+                          [
+                            ( "viewer_url",
+                              `String
+                                (Printf.sprintf "http://127.0.0.1:%d/viewer" p)
+                            );
+                          ]
+                      | None -> []
+                    in
                     ok_result
                       (`Assoc
-                         [
-                           ("session", `String sid);
-                           ("text", `String text);
-                           ("rows", `Int rows);
-                           ("cols", `Int cols);
-                         ]))
+                         ([
+                            ("session", `String sid);
+                            ("text", `String text);
+                            ("rows", `Int rows);
+                            ("cols", `Int cols);
+                          ]
+                         @ viewer_url)))
           with Unix.Unix_error (err, _, _) ->
             Unix.close ic_read;
             Unix.close ic_write;
@@ -513,6 +528,54 @@ let handle_tool (session : Session.t) ~tool_name
                   match frame_of_json json with
                   | Error e -> Error e
                   | Ok text -> ok_result (`String text)))))
+  | "headless_keys" -> (
+      match require_session args "session" with
+      | Error e -> Error e
+      | Ok s -> (
+          match List.assoc_opt "keys" args with
+          | Some (`List key_jsons) ->
+              let keys =
+                List.filter_map
+                  (fun j -> match j with `String k -> Some k | _ -> None)
+                  key_jsons
+              in
+              if keys = [] then Error "Empty keys array"
+              else
+                let delay_s =
+                  let ms =
+                    match get_int args "delay_ms" with
+                    | Some n -> n
+                    | None -> 50
+                  in
+                  Float.of_int ms /. 1000.0
+                in
+                let rec send_keys = function
+                  | [] -> Error "Empty keys array"
+                  | [ k ] ->
+                      let cmd =
+                        `Assoc [ ("cmd", `String "key"); ("key", `String k) ]
+                      in
+                      headless_rpc s cmd
+                  | k :: rest ->
+                      let cmd =
+                        `Assoc [ ("cmd", `String "key"); ("key", `String k) ]
+                      in
+                      (match headless_rpc s cmd with
+                      | Error e -> Error e
+                      | Ok json -> (
+                          match frame_of_json json with
+                          | Error e -> Error e
+                          | Ok _text ->
+                              Unix.sleepf delay_s;
+                              send_keys rest))
+                in
+                (match send_keys keys with
+                | Error e -> Error e
+                | Ok json -> (
+                    match frame_of_json json with
+                    | Error e -> Error e
+                    | Ok text -> ok_result (`String text)))
+          | _ -> Error "Missing required parameter: keys (array)"))
   | "headless_click" -> (
       match require_session args "session" with
       | Error e -> Error e

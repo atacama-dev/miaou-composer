@@ -1,5 +1,6 @@
 (library
  (name miaou_composer_bridge)
+ (modules action_codec layout_codec page_codec tool_codec widget_factory)
  (libraries
   miaou_composer_lib
   miaou-core.widgets.input

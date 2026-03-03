@@ -21,8 +21,7 @@ module FB = Miaou_widgets_layout.File_browser_widget
 module LW = Miaou_widgets_display.List_widget
 
 type mode = Design | Preview
-
-type pane = PalettePane | TreePane | PropertiesPane | StatePane
+type pane = PalettePane | TreePane | PropertiesPane | StatePane | ToolsPane
 
 type modal_kind =
   | File_path of { label : string; on_confirm : string -> t -> t }
@@ -52,6 +51,10 @@ and t = {
   state_cursor : int;
   state_form : Form.t option;
   state_editing_idx : int option;
+  (* Tools pane UI *)
+  tool_cursor : int;
+  tool_form : Form.t option;
+  init_action_cursor : int;
 }
 
 let make_root_layout () =
@@ -141,8 +144,7 @@ let select_widget t ~id =
 let select_container t ~container_id =
   match Clayout.path_of_container_id container_id with
   | None -> t
-  | Some path ->
-      { t with insert_path = path; active_pane = PalettePane }
+  | Some path -> { t with insert_path = path; active_pane = PalettePane }
 
 let insert_path_label t =
   match t.insert_path with
@@ -188,6 +190,9 @@ let create () =
     state_cursor = 0;
     state_form = None;
     state_editing_idx = None;
+    tool_cursor = 0;
+    tool_form = None;
+    init_action_cursor = 0;
   }
 
 let get_page t =
@@ -239,14 +244,14 @@ let add_widget t ~widget_type ~params_json =
   in
   match Cfactory.create_widget full_json with
   | Error msg -> Error msg
-  | Ok (widget_id, widget_box) ->
+  | Ok (widget_id, widget_box) -> (
       let position =
         Clayout.count_children_at cpage.Cpage.layout t.insert_path
       in
-      (match
-         Cpage.add_widget cpage ~id:widget_id ~widget_box ~path:t.insert_path
-           ~position
-       with
+      match
+        Cpage.add_widget cpage ~id:widget_id ~widget_box ~path:t.insert_path
+          ~position
+      with
       | Error msg -> Error msg
       | Ok () ->
           let new_counter = t.widget_counter + 1 in
@@ -263,10 +268,8 @@ let default_params_for widget_type =
           ("title", `String "Select");
           ("items", `List [ `String "Option 1"; `String "Option 2" ]);
         ]
-  | "description_list" ->
-      `Assoc [ ("items", `List [ `String "Key: Value" ]) ]
-  | "list" ->
-      `Assoc [ ("items", `List [ `String "Item 1"; `String "Item 2" ]) ]
+  | "description_list" -> `Assoc [ ("items", `List [ `String "Key: Value" ]) ]
+  | "list" -> `Assoc [ ("items", `List [ `String "Item 1"; `String "Item 2" ]) ]
   | _ -> `Assoc []
 
 let add_widget_with_defaults t ~widget_type =
@@ -318,14 +321,25 @@ let add_container t ~container_type =
           }
     | "box" ->
         Clayout.Boxed
-          { title = None; style = Clayout.Single; padding = no_pad; child = None; basis = Clayout.Auto }
+          {
+            title = None;
+            style = Clayout.Single;
+            padding = no_pad;
+            child = None;
+            basis = Clayout.Auto;
+          }
     | "card" ->
-        Clayout.Card { title = None; footer = None; accent = None; child = None; basis = Clayout.Auto }
+        Clayout.Card
+          {
+            title = None;
+            footer = None;
+            accent = None;
+            child = None;
+            basis = Clayout.Auto;
+          }
     | _ -> failwith ("Unknown container type: " ^ container_type)
   in
-  let n_before =
-    Clayout.count_children_at cpage.Cpage.layout t.insert_path
-  in
+  let n_before = Clayout.count_children_at cpage.Cpage.layout t.insert_path in
   ignore
     (Clayout.add_child_at cpage.Cpage.layout ~path:t.insert_path
        ~position:n_before node);
@@ -364,18 +378,14 @@ let apply_properties_form t form =
               in
               ([], pos)
         in
-        (match Cpage.remove_widget cpage ~id with
-        | Error _ -> ()
-        | Ok () -> ());
+        (match Cpage.remove_widget cpage ~id with Error _ -> () | Ok () -> ());
         let params_json = Form.to_json form in
         let new_id = Form.get_id form in
         let actual_id = if new_id = "" then id else new_id in
         let full_json =
           match params_json with
           | `Assoc fields ->
-              let fields_no_id =
-                List.filter (fun (k, _) -> k <> "id") fields
-              in
+              let fields_no_id = List.filter (fun (k, _) -> k <> "id") fields in
               `Assoc
                 ([ ("type", `String widget_type); ("id", `String actual_id) ]
                 @ fields_no_id)
@@ -495,12 +505,12 @@ let import_page t path =
         let new_params = Hashtbl.create 16 in
         List.iter
           (fun widget_id ->
-            (match Hashtbl.find_opt new_cpage.Cpage.widgets widget_id with
+            match Hashtbl.find_opt new_cpage.Cpage.widgets widget_id with
             | Some wb ->
                 let wtype = Cwbox.type_name wb in
                 let params = default_params_for wtype in
                 Hashtbl.replace new_params widget_id params
-            | None -> ()))
+            | None -> ())
           (Clayout.collect_ids new_cpage.Cpage.layout);
         let t' =
           {
@@ -516,6 +526,9 @@ let import_page t path =
             state_cursor = 0;
             state_form = None;
             state_editing_idx = None;
+            tool_cursor = 0;
+            tool_form = None;
+            init_action_cursor = 0;
           }
         in
         Ok (refresh_layout_tree t')
@@ -529,17 +542,19 @@ let cycle_pane t =
     | PalettePane -> TreePane
     | TreePane -> PropertiesPane
     | PropertiesPane -> StatePane
-    | StatePane -> PalettePane
+    | StatePane -> ToolsPane
+    | ToolsPane -> PalettePane
   in
   { t with active_pane = next }
 
 let cycle_pane_back t =
   let prev =
     match t.active_pane with
-    | PalettePane -> StatePane
+    | PalettePane -> ToolsPane
     | TreePane -> PalettePane
     | PropertiesPane -> TreePane
     | StatePane -> PropertiesPane
+    | ToolsPane -> StatePane
   in
   { t with active_pane = prev }
 
@@ -565,8 +580,7 @@ let remove_state_var t ~index =
   if index < 0 || index >= List.length schema then
     Error (Printf.sprintf "State var index %d not found" index)
   else begin
-    cpage.Cpage.state_schema <-
-      List.filteri (fun i _ -> i <> index) schema;
+    cpage.Cpage.state_schema <- List.filteri (fun i _ -> i <> index) schema;
     Ok { t with state_cursor = max 0 (index - 1) }
   end
 
@@ -581,7 +595,46 @@ let remove_state_binding t ~index =
   if index < 0 || index >= List.length bindings then
     Error (Printf.sprintf "State binding index %d not found" index)
   else begin
-    cpage.Cpage.state_bindings <-
-      List.filteri (fun i _ -> i <> index) bindings;
+    cpage.Cpage.state_bindings <- List.filteri (fun i _ -> i <> index) bindings;
     Ok t
+  end
+
+(* ---- Tools / init_actions helpers ---- *)
+
+let get_tools t =
+  let cpage = get_page t in
+  cpage.Cpage.tools
+
+let get_init_actions t =
+  let cpage = get_page t in
+  cpage.Cpage.init_actions
+
+let add_tool t (tool : Clib.Tool_def.t) =
+  let cpage = get_page t in
+  cpage.Cpage.tools <- cpage.Cpage.tools @ [ tool ];
+  { t with tool_cursor = List.length cpage.Cpage.tools - 1 }
+
+let remove_tool t ~index =
+  let cpage = get_page t in
+  let tools = cpage.Cpage.tools in
+  if index < 0 || index >= List.length tools then
+    Error (Printf.sprintf "Tool index %d not found" index)
+  else begin
+    cpage.Cpage.tools <- List.filteri (fun i _ -> i <> index) tools;
+    Ok { t with tool_cursor = max 0 (index - 1) }
+  end
+
+let add_init_action t (action : Clib.Action.t) =
+  let cpage = get_page t in
+  cpage.Cpage.init_actions <- cpage.Cpage.init_actions @ [ action ];
+  { t with init_action_cursor = List.length cpage.Cpage.init_actions - 1 }
+
+let remove_init_action t ~index =
+  let cpage = get_page t in
+  let actions = cpage.Cpage.init_actions in
+  if index < 0 || index >= List.length actions then
+    Error (Printf.sprintf "Init action index %d not found" index)
+  else begin
+    cpage.Cpage.init_actions <- List.filteri (fun i _ -> i <> index) actions;
+    Ok { t with init_action_cursor = max 0 (index - 1) }
   end

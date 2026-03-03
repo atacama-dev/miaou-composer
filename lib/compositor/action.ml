@@ -21,3 +21,5 @@ type t =
   | Copy_widget_to_state of { key : string; source : string }
   | Inc_state of { key : string; by : float }
   | Reset_state of { key : string }
+  | Sequence of t list
+  | Call_tool of { name : string; args : (string * string) list }
