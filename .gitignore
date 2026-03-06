@@ -1,0 +1,14 @@
+_build/
+_opam/
+*.install
+.merlin
+*.byte
+*.native
+.claude/
+specs/
+.mcp.json
+.playwright-mcp/
+canvas_tool_state.json
+canvas_tool_state.json.broken
+composer_canvas_export.json
+.specify/

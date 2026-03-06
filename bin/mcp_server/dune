@@ -1,0 +1,13 @@
+(executable
+ (name main)
+ (public_name miaou-composer-mcp)
+ (link_flags
+  (:standard -linkall))
+ (libraries
+  miaou_composer_lib
+  miaou_composer_bridge
+  miaou_composer_export
+  miaou-core.internals
+  miaou-registry
+  yojson
+  unix))

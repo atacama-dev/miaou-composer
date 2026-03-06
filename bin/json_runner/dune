@@ -1,0 +1,25 @@
+(library
+ (name miaou_composer_json_runner)
+ (modules runner_page)
+ (libraries
+  miaou_composer_lib
+  miaou_composer_bridge
+  miaou-core.core
+  miaou-core.internals
+  miaou-core.interfaces
+  yojson))
+
+(executable
+ (name main)
+ (modules main)
+ (public_name miaou-composer-json)
+ (libraries
+  miaou_composer_json_runner
+  miaou-core.core
+  miaou-core.helpers
+  miaou-core.interfaces
+  miaou-runner.tui
+  miaou-driver-web.driver
+  eio
+  eio_main
+  unix))

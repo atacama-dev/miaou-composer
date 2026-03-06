@@ -1,0 +1,242 @@
+{
+  "id": "lazygit_light",
+  "size": { "rows": 24, "cols": 120 },
+
+  "tools": [
+    {
+      "name": "git_status",
+      "type": "process",
+      "bin": "git",
+      "argv": ["status", "--short"],
+      "capture_stdout_lines": "status_files"
+    },
+    {
+      "name": "git_log",
+      "type": "process",
+      "bin": "git",
+      "argv": ["log", "--oneline", "--decorate=short", "-40"],
+      "capture_stdout_lines": "log_lines"
+    },
+    {
+      "name": "git_diff_file",
+      "type": "shell",
+      "cmd": "f=$(echo '$state.selected_file' | awk '{print $NF}'); { git diff -- \"$f\"; git diff --cached -- \"$f\"; } 2>/dev/null | head -300",
+      "capture_stdout": "diff_text"
+    },
+    {
+      "name": "git_show_commit",
+      "type": "shell",
+      "cmd": "hash=$(echo '$state.selected_log' | awk '{print $1}'); git show --stat --patch \"$hash\" 2>/dev/null | head -300",
+      "capture_stdout": "diff_text"
+    },
+    {
+      "name": "git_stage",
+      "type": "shell",
+      "cmd": "git add -- \"$(echo '$state.selected_file' | awk '{print $NF}')\"",
+      "on_exit": {
+        "type": "sequence",
+        "steps": [
+          { "type": "call_tool", "name": "git_status",   "args": {} },
+          { "type": "call_tool", "name": "git_diff_file", "args": {} }
+        ]
+      }
+    },
+    {
+      "name": "git_unstage",
+      "type": "shell",
+      "cmd": "git restore --staged -- \"$(echo '$state.selected_file' | awk '{print $NF}')\"",
+      "on_exit": {
+        "type": "sequence",
+        "steps": [
+          { "type": "call_tool", "name": "git_status",   "args": {} },
+          { "type": "call_tool", "name": "git_diff_file", "args": {} }
+        ]
+      }
+    },
+    {
+      "name": "git_stage_all",
+      "type": "process",
+      "bin": "git",
+      "argv": ["add", "-A"],
+      "on_exit": {
+        "type": "sequence",
+        "steps": [
+          { "type": "call_tool", "name": "git_status",   "args": {} },
+          { "type": "call_tool", "name": "git_diff_file", "args": {} }
+        ]
+      }
+    },
+    {
+      "name": "git_discard",
+      "type": "shell",
+      "cmd": "git restore -- \"$(echo '$state.selected_file' | awk '{print $NF}')\" 2>/dev/null || true",
+      "on_exit": {
+        "type": "sequence",
+        "steps": [
+          { "type": "call_tool", "name": "git_status",   "args": {} },
+          { "type": "call_tool", "name": "git_diff_file", "args": {} }
+        ]
+      }
+    },
+    {
+      "name": "git_push",
+      "type": "process",
+      "bin": "git",
+      "argv": ["push"],
+      "on_exit": {
+        "type": "sequence",
+        "steps": [
+          { "type": "call_tool", "name": "git_status", "args": {} },
+          { "type": "call_tool", "name": "git_log",    "args": {} }
+        ]
+      }
+    },
+    {
+      "name": "git_pull",
+      "type": "process",
+      "bin": "git",
+      "argv": ["pull", "--ff-only"],
+      "on_exit": {
+        "type": "sequence",
+        "steps": [
+          { "type": "call_tool", "name": "git_status", "args": {} },
+          { "type": "call_tool", "name": "git_log",    "args": {} }
+        ]
+      }
+    }
+  ],
+
+  "state_schema": [
+    { "key": "status_files",  "type": "string_list", "default": [],  "scope": "ephemeral" },
+    { "key": "log_lines",     "type": "string_list", "default": [],  "scope": "ephemeral" },
+    { "key": "diff_text",     "type": "string",      "default": "Select a file or commit to view diff", "scope": "ephemeral" },
+    { "key": "selected_file", "type": "string",      "default": "",  "scope": "ephemeral" },
+    { "key": "selected_log",  "type": "string",      "default": "",  "scope": "ephemeral" }
+  ],
+
+  "state_bindings": [
+    { "key": "status_files", "widget_id": "files_list", "prop": "items" },
+    { "key": "log_lines",    "widget_id": "log_list",   "prop": "items" },
+    { "key": "diff_text",    "widget_id": "diff_pager", "prop": "text"  }
+  ],
+
+  "init_actions": [
+    { "type": "call_tool", "name": "git_status", "args": {} },
+    { "type": "call_tool", "name": "git_log",    "args": {} }
+  ],
+
+  "layout": {
+    "type": "flex",
+    "direction": "row",
+    "gap": 1,
+    "children": [
+      {
+        "type": "flex",
+        "direction": "column",
+        "gap": 1,
+        "basis": { "type": "px", "value": 42 },
+        "children": [
+          {
+            "type": "box",
+            "title": "Files  [s]tage [u]nstage [a]ll [x]discard",
+            "style": "single",
+            "basis": "fill",
+            "child": {
+              "type": "list",
+              "id": "files_list",
+              "items": []
+            }
+          },
+          {
+            "type": "box",
+            "title": "Log  [p]ush [f]etch",
+            "style": "single",
+            "basis": { "type": "px", "value": 9 },
+            "child": {
+              "type": "list",
+              "id": "log_list",
+              "items": []
+            }
+          }
+        ]
+      },
+      {
+        "type": "box",
+        "title": "Diff / Show  [r]efresh [q]uit",
+        "style": "single",
+        "basis": "fill",
+        "child": {
+          "type": "pager",
+          "id": "diff_pager",
+          "text": "Select a file or commit to view diff"
+        }
+      }
+    ]
+  },
+
+  "focus_ring": ["files_list", "log_list", "diff_pager"],
+
+  "wirings": [
+    {
+      "source": "files_list",
+      "event": "select",
+      "action": {
+        "type": "sequence",
+        "steps": [
+          { "type": "copy_widget_to_state", "key": "selected_file", "source": "files_list" },
+          { "type": "call_tool", "name": "git_diff_file", "args": {} }
+        ]
+      }
+    },
+    {
+      "source": "log_list",
+      "event": "select",
+      "action": {
+        "type": "sequence",
+        "steps": [
+          { "type": "copy_widget_to_state", "key": "selected_log", "source": "log_list" },
+          { "type": "call_tool", "name": "git_show_commit", "args": {} }
+        ]
+      }
+    }
+  ],
+
+  "key_handlers": [
+    {
+      "key": "s",
+      "action": { "type": "call_tool", "name": "git_stage", "args": {} }
+    },
+    {
+      "key": "u",
+      "action": { "type": "call_tool", "name": "git_unstage", "args": {} }
+    },
+    {
+      "key": "a",
+      "action": { "type": "call_tool", "name": "git_stage_all", "args": {} }
+    },
+    {
+      "key": "x",
+      "action": { "type": "call_tool", "name": "git_discard", "args": {} }
+    },
+    {
+      "key": "p",
+      "action": { "type": "call_tool", "name": "git_push", "args": {} }
+    },
+    {
+      "key": "f",
+      "action": { "type": "call_tool", "name": "git_pull", "args": {} }
+    },
+    {
+      "key": "r",
+      "action": {
+        "type": "sequence",
+        "steps": [
+          { "type": "call_tool", "name": "git_status",   "args": {} },
+          { "type": "call_tool", "name": "git_log",      "args": {} },
+          { "type": "call_tool", "name": "git_diff_file", "args": {} }
+        ]
+      }
+    },
+    { "key": "q", "action": { "type": "quit" } }
+  ]
+}

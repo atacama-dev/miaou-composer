@@ -1,0 +1,3 @@
+(library
+ (name miaou_composer_export)
+ (libraries miaou_composer_lib miaou_composer_bridge yojson))

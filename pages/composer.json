@@ -1,0 +1,300 @@
+{
+  "id": "composer",
+  "size": { "rows": 24, "cols": 120 },
+
+  "tools": [
+    {
+      "name": "canvas_sync",
+      "type": "process",
+      "bin": "_build/default/bin/canvas_tool/main.exe",
+      "argv": [ "--state", "canvas_tool_state.json", "sync" ],
+      "capture_json_fields": true
+    },
+    {
+      "name": "canvas_add",
+      "type": "process",
+      "bin": "_build/default/bin/canvas_tool/main.exe",
+      "argv": [ "--state", "canvas_tool_state.json", "add", "--type", "$args.widget_type" ],
+      "capture_json_fields": true
+    },
+    {
+      "name": "canvas_remove",
+      "type": "process",
+      "bin": "_build/default/bin/canvas_tool/main.exe",
+      "argv": [ "--state", "canvas_tool_state.json", "remove", "--id", "$args.id" ],
+      "capture_json_fields": true
+    },
+    {
+      "name": "canvas_update",
+      "type": "process",
+      "bin": "_build/default/bin/canvas_tool/main.exe",
+      "argv": [ "--state", "canvas_tool_state.json", "update", "--id", "$args.id", "--key", "$args.key", "--value", "$args.value" ],
+      "capture_json_fields": true
+    },
+    {
+      "name": "canvas_query_widget",
+      "type": "process",
+      "bin": "_build/default/bin/canvas_tool/main.exe",
+      "argv": [ "--state", "canvas_tool_state.json", "query", "--id", "$args.id" ],
+      "capture_json_fields": true
+    },
+    {
+      "name": "canvas_clear",
+      "type": "process",
+      "bin": "_build/default/bin/canvas_tool/main.exe",
+      "argv": [ "--state", "canvas_tool_state.json", "clear" ],
+      "capture_json_fields": true
+    },
+    {
+      "name": "canvas_export",
+      "type": "process",
+      "bin": "_build/default/bin/canvas_tool/main.exe",
+      "argv": [ "--state", "canvas_tool_state.json", "export", "--output", "composer_canvas_export.json", "--no-select" ],
+      "capture_json_fields": true
+    }
+  ],
+
+  "state_schema": [
+    { "key": "selected_type",  "type": "string", "default": "",   "scope": "ephemeral" },
+    { "key": "canvas_def",     "type": "json",   "default": null, "scope": "ephemeral" },
+    { "key": "canvas_selected","type": "string", "default": "",   "scope": "ephemeral" },
+    { "key": "prop_info",      "type": "string", "default": "Select a canvas\nwidget to edit", "scope": "ephemeral" },
+    { "key": "prop_0_key",     "type": "string", "default": "",   "scope": "ephemeral" },
+    { "key": "prop_0_val",     "type": "string", "default": "",   "scope": "ephemeral" },
+    { "key": "prop_0_edit",    "type": "string", "default": "",   "scope": "ephemeral" },
+    { "key": "prop_1_key",     "type": "string", "default": "",   "scope": "ephemeral" },
+    { "key": "prop_1_val",     "type": "string", "default": "",   "scope": "ephemeral" },
+    { "key": "prop_1_edit",    "type": "string", "default": "",   "scope": "ephemeral" },
+    { "key": "prop_2_key",     "type": "string", "default": "",   "scope": "ephemeral" },
+    { "key": "prop_2_val",     "type": "string", "default": "",   "scope": "ephemeral" },
+    { "key": "prop_2_edit",    "type": "string", "default": "",   "scope": "ephemeral" },
+    { "key": "prop_3_key",     "type": "string", "default": "",   "scope": "ephemeral" },
+    { "key": "prop_3_val",     "type": "string", "default": "",   "scope": "ephemeral" },
+    { "key": "prop_3_edit",    "type": "string", "default": "",   "scope": "ephemeral" },
+    { "key": "prop_4_key",     "type": "string", "default": "",   "scope": "ephemeral" },
+    { "key": "prop_4_val",     "type": "string", "default": "",   "scope": "ephemeral" },
+    { "key": "prop_4_edit",    "type": "string", "default": "",   "scope": "ephemeral" }
+  ],
+
+  "state_bindings": [
+    { "key": "prop_info",  "widget_id": "info",         "prop": "text"  },
+    { "key": "prop_0_key", "widget_id": "prop_input_0", "prop": "title" },
+    { "key": "prop_0_val", "widget_id": "prop_input_0", "prop": "text"  },
+    { "key": "prop_1_key", "widget_id": "prop_input_1", "prop": "title" },
+    { "key": "prop_1_val", "widget_id": "prop_input_1", "prop": "text"  },
+    { "key": "prop_2_key", "widget_id": "prop_input_2", "prop": "title" },
+    { "key": "prop_2_val", "widget_id": "prop_input_2", "prop": "text"  },
+    { "key": "prop_3_key", "widget_id": "prop_input_3", "prop": "title" },
+    { "key": "prop_3_val", "widget_id": "prop_input_3", "prop": "text"  },
+    { "key": "prop_4_key", "widget_id": "prop_input_4", "prop": "title" },
+    { "key": "prop_4_val", "widget_id": "prop_input_4", "prop": "text"  }
+  ],
+
+  "init_actions": [
+    {
+      "type": "copy_widget_to_state",
+      "key": "selected_type",
+      "source": "palette"
+    },
+    {
+      "type": "call_tool",
+      "name": "canvas_sync",
+      "args": {}
+    }
+  ],
+
+  "layout": {
+    "type": "flex",
+    "direction": "row",
+    "gap": 1,
+    "children": [
+      {
+        "type": "flex",
+        "direction": "column",
+        "gap": 1,
+        "basis": { "type": "px", "value": 26 },
+        "children": [
+          {
+            "type": "box",
+            "title": "Palette",
+            "style": "single",
+            "basis": "fill",
+            "child": {
+              "type": "list",
+              "id": "palette",
+              "items": [
+                "button", "checkbox", "textbox", "textarea",
+                "select", "radio", "switch",
+                "pager", "list", "description_list"
+              ]
+            }
+          }
+        ]
+      },
+      {
+        "type": "box",
+        "title": "Canvas",
+        "style": "single",
+        "basis": "fill",
+        "child": {
+          "type": "flex",
+          "direction": "column",
+          "gap": 1,
+          "children": []
+        }
+      },
+      {
+        "type": "flex",
+        "direction": "column",
+        "gap": 1,
+        "basis": { "type": "px", "value": 34 },
+        "children": [
+          {
+            "type": "box",
+            "title": "Properties",
+            "style": "single",
+            "basis": "fill",
+            "child": {
+              "type": "flex",
+              "direction": "column",
+              "gap": 0,
+              "children": [
+                { "type": "textbox", "id": "prop_input_0", "title": "", "width": 28 },
+                { "type": "textbox", "id": "prop_input_1", "title": "", "width": 28 },
+                { "type": "textbox", "id": "prop_input_2", "title": "", "width": 28 },
+                { "type": "textbox", "id": "prop_input_3", "title": "", "width": 28 },
+                { "type": "textbox", "id": "prop_input_4", "title": "", "width": 28 }
+              ]
+            }
+          },
+          {
+            "type": "box",
+            "title": "Info",
+            "style": "single",
+            "basis": { "type": "px", "value": 10 },
+            "child": {
+              "type": "pager",
+              "id": "info",
+              "focusable": false,
+              "text": "Keys:\n [a]    Add widget\n [d]    Delete widget\n [c]    Clear canvas\n [e]    Export\n [Tab]  Next widget\n [q]    Quit\n\nAdd a widget:\n Select type in\n Palette, then [a]"
+            }
+          }
+        ]
+      }
+    ]
+  },
+
+  "focus_ring": [
+    "palette",
+    "prop_input_0", "prop_input_1", "prop_input_2",
+    "prop_input_3", "prop_input_4"
+  ],
+
+  "wirings": [
+    {
+      "source": "palette",
+      "event": "select",
+      "action": {
+        "type": "copy_widget_to_state",
+        "key": "selected_type",
+        "source": "palette"
+      }
+    },
+    {
+      "source": "prop_input_0",
+      "event": "change",
+      "action": {
+        "type": "sequence",
+        "steps": [
+          { "type": "copy_widget_to_state", "key": "prop_0_edit", "source": "prop_input_0" },
+          { "type": "call_tool", "name": "canvas_update",
+            "args": { "id": "$state.canvas_selected", "key": "$state.prop_0_key", "value": "$state.prop_0_edit" } }
+        ]
+      }
+    },
+    {
+      "source": "prop_input_1",
+      "event": "change",
+      "action": {
+        "type": "sequence",
+        "steps": [
+          { "type": "copy_widget_to_state", "key": "prop_1_edit", "source": "prop_input_1" },
+          { "type": "call_tool", "name": "canvas_update",
+            "args": { "id": "$state.canvas_selected", "key": "$state.prop_1_key", "value": "$state.prop_1_edit" } }
+        ]
+      }
+    },
+    {
+      "source": "prop_input_2",
+      "event": "change",
+      "action": {
+        "type": "sequence",
+        "steps": [
+          { "type": "copy_widget_to_state", "key": "prop_2_edit", "source": "prop_input_2" },
+          { "type": "call_tool", "name": "canvas_update",
+            "args": { "id": "$state.canvas_selected", "key": "$state.prop_2_key", "value": "$state.prop_2_edit" } }
+        ]
+      }
+    },
+    {
+      "source": "prop_input_3",
+      "event": "change",
+      "action": {
+        "type": "sequence",
+        "steps": [
+          { "type": "copy_widget_to_state", "key": "prop_3_edit", "source": "prop_input_3" },
+          { "type": "call_tool", "name": "canvas_update",
+            "args": { "id": "$state.canvas_selected", "key": "$state.prop_3_key", "value": "$state.prop_3_edit" } }
+        ]
+      }
+    },
+    {
+      "source": "prop_input_4",
+      "event": "change",
+      "action": {
+        "type": "sequence",
+        "steps": [
+          { "type": "copy_widget_to_state", "key": "prop_4_edit", "source": "prop_input_4" },
+          { "type": "call_tool", "name": "canvas_update",
+            "args": { "id": "$state.canvas_selected", "key": "$state.prop_4_key", "value": "$state.prop_4_edit" } }
+        ]
+      }
+    }
+  ],
+
+  "key_handlers": [
+    {
+      "key": "a",
+      "action": {
+        "type": "call_tool",
+        "name": "canvas_add",
+        "args": { "widget_type": "$state.selected_type" }
+      }
+    },
+    {
+      "key": "d",
+      "action": {
+        "type": "call_tool",
+        "name": "canvas_remove",
+        "args": { "id": "$state.canvas_selected" }
+      }
+    },
+    {
+      "key": "c",
+      "action": {
+        "type": "call_tool",
+        "name": "canvas_clear",
+        "args": {}
+      }
+    },
+    {
+      "key": "e",
+      "action": {
+        "type": "call_tool",
+        "name": "canvas_export",
+        "args": {}
+      }
+    },
+    { "key": "q", "action": { "type": "quit" } }
+  ]
+}

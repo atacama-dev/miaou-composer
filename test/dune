@@ -1,0 +1,12 @@
+(test
+ (name test_compositor)
+ (libraries
+  alcotest
+  miaou_composer_lib
+  miaou_composer_bridge
+  miaou_composer_export
+  yojson))
+
+(test
+ (name test_designer)
+ (libraries alcotest str miaou_composer_designer miaou_composer_lib yojson))

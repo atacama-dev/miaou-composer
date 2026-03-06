@@ -1,0 +1,25 @@
+(library
+ (name miaou_composer_designer)
+ (modules designer_state menu form preview page)
+ (libraries
+  miaou_composer_lib
+  miaou_composer_bridge
+  miaou-core.internals
+  miaou-core.widgets.layout
+  miaou-core.widgets.display
+  miaou-core.widgets.input
+  miaou-core.runner-common
+  miaou-runner.tui
+  yojson))
+
+(executable
+ (name main)
+ (modules main)
+ (public_name miaou-composer-designer)
+ (libraries
+  miaou_composer_designer
+  miaou-core.helpers
+  miaou-core.interfaces
+  miaou-runner.tui
+  eio_main
+  unix))
