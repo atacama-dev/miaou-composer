@@ -431,6 +431,14 @@ let handle_tool (session : Session.t) ~tool_name
           let cols =
             match get_int args "cols" with Some n -> n | None -> 80
           in
+          let extra_args =
+            match List.assoc_opt "args" args with
+            | Some (`List items) ->
+                List.filter_map
+                  (fun v -> match v with `String s -> Some s | _ -> None)
+                  items
+            | _ -> []
+          in
           let viewer_port = get_int args "viewer_port" in
           (* Build environment: current env + MIAOU_DRIVER=headless + extras *)
           let base_env = Unix.environment () in
@@ -462,8 +470,9 @@ let handle_tool (session : Session.t) ~tool_name
           let oc_read, oc_write = Unix.pipe () in
           let er_read, er_write = Unix.pipe () in
           try
+            let argv = Array.of_list (binary :: extra_args) in
             let pid =
-              Unix.create_process_env binary [| binary |] env oc_read ic_write
+              Unix.create_process_env binary argv env oc_read ic_write
                 er_write
             in
             Unix.close oc_read;
